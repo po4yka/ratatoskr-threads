@@ -1,10 +1,21 @@
 # Ratatoskr Threads
 
-`ratatoskr-threads` is the Threads account and capture bounded context for Ratatoskr Next. It combines official user-authorized account capabilities with explicit capture of public posts, official public representations, and versioned Data Export imports.
+`ratatoskr-threads` is the Threads account and capture bounded context for Ratatoskr. It combines official user-authorized account capabilities with explicit capture of public posts, official public representations, and versioned Data Export imports.
 
 > **Status:** architecture bootstrap. OAuth, account synchronization, capture resolution, export import, and persistence described below are planned and are not implemented yet.
 
-## Role in Ratatoskr Next
+> [!IMPORTANT]
+> **Ratatoskr is in development.** No database holds data that has to survive a schema change.
+> While this status holds, these two rules replace what the documents below plan:
+>
+> - the API and the database keep their first version. There is no `v2` and no later major
+>   version.
+> - the database has no migrations. One schema definition exists, and a schema change edits it in
+>   place.
+>
+> Only the repository owner changes this status.
+
+## Role in Ratatoskr
 
 Threads does not currently provide Ratatoskr with an authoritative API for enumerating a personal user's complete native Saved list. This repository therefore keeps official account data and explicit Ratatoskr captures as separate ingestion lanes.
 
