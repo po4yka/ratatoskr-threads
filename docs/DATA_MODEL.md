@@ -1,6 +1,6 @@
 # Threads connector data model
 
-## Owned schema: `threads_archive.*`
+## Planned owned schema: `threads_archive.*`
 
 - `accounts`, encrypted credentials, scopes, capabilities, expiry/status.
 - `posts`, authors, text/media revisions, canonical permalinks, raw blob references.

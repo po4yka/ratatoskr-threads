@@ -10,8 +10,8 @@
 >
 > - the API and the database keep their first version. There is no `v2` and no later major
 >   version.
-> - the database has no migrations. One schema definition exists, and a schema change edits it in
->   place.
+> - the database has no migrations. No schema exists yet. The first persistence change creates one
+>   schema definition, and later schema changes edit it in place.
 >
 > Only the repository owner changes this status.
 
@@ -84,7 +84,7 @@ This means Ratatoskr can reliably state that the user captured the post locally 
 
 ## Planned data model
 
-The service owns a `threads_archive.*` PostgreSQL schema:
+The service will own a `threads_archive.*` PostgreSQL schema when persistence is implemented:
 
 ```text
 threads_accounts
@@ -270,7 +270,7 @@ Every operation records acquisition method, authority, resolver/parser version, 
 
 ## Workspace integration
 
-`ratatoskr-workspace` pins Threads with compatible social contracts, Platform, Mobile, Browser Extension, Extractor, Knowledge, and clients. The connector remains independently testable using mock OAuth/API servers, public-resolution fixtures, and synthetic export archives.
+Planned: `ratatoskr-workspace` will pin Threads with compatible social contracts, Platform, Mobile, Browser Extension, Extractor, Knowledge, and clients. No workspace pin or integration profile exists for this service today. The connector will remain independently testable using mock OAuth/API servers, public-resolution fixtures, and synthetic export archives.
 
 ## Project status
 

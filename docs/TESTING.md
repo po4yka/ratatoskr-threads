@@ -8,8 +8,8 @@ Required tests:
 - Explicit capture idempotency/provenance and public/private/deleted/unsupported resolution.
 - Safe Data Export import: schema versions, zip/path/decompression limits, unknown records, duplicates, partial assets.
 - Optional publishing/reply idempotency and error/audit matrix.
-- Missing-data versus deletion semantics, privacy deletion, migrations, outbox/inbox replay, no-secret/content logging.
-- Workspace capture -> Threads -> Knowledge flow.
+- Missing-data versus deletion semantics, privacy deletion, schema initialization, outbox/inbox replay, no-secret/content logging.
+- Planned workspace capture -> Threads -> Knowledge flow.
 
 Fixtures are synthetic or authorized; no personal account is required in CI.
 

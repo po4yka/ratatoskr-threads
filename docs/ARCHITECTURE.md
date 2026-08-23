@@ -65,7 +65,7 @@ ratatoskr-threads/
 │   └── test-support/
 ├── services/
 │   └── threads/
-├── migrations/
+├── schema/
 ├── fixtures/
 │   ├── captures/
 │   └── data-exports/
@@ -574,7 +574,7 @@ Raw URLs, handles, text, and post IDs are excluded from unbounded metric labels.
 
 - OAuth and encrypted credential lifecycle;
 - fake official provider/embed surfaces;
-- SQLx migrations and transactions;
+- SQL schema initialization and transactions;
 - BlobStore raw export/media flow;
 - outbox/inbox replay;
 - interrupted account sync and import recovery.
@@ -589,7 +589,7 @@ Raw URLs, handles, text, and post IDs are excluded from unbounded metric labels.
 - unknown provider response/export variants;
 - access loss after prior observation.
 
-### Workspace end-to-end
+### Planned workspace end-to-end
 
 - explicit mobile/browser/Telegram capture;
 - post/relation resolution and SocialSource indexing;

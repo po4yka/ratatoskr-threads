@@ -17,7 +17,7 @@ The service must preserve the difference between provider-authoritative account 
 
 ## Current phase
 
-The repository is in architecture bootstrap. Do not assume Rust crates, OAuth flows, API clients, oEmbed resolution, Data Export parsers, migrations, or CI commands exist unless they are present in the checkout.
+The repository is in architecture bootstrap. Do not assume Rust crates, OAuth flows, API clients, oEmbed resolution, Data Export parsers, a database schema, or CI commands exist unless they are present in the checkout.
 
 When creating initial implementation:
 
@@ -382,7 +382,7 @@ unknown
 - Preserve permitted audit/provenance even when the body can no longer be served.
 - Distinguish lost scope/connection from provider content deletion.
 
-## Persistence and migrations
+## Persistence and schema evolution
 
 Threads writes only its owned schema.
 
@@ -409,7 +409,7 @@ Rules:
 - no cross-schema writes or foreign keys;
 - raw archives/responses remain separate from normalized projections;
 - uniqueness/idempotency constraints reflect provider and capture identities;
-- migrations preserve acquisition, authority, relation, and availability history;
+- schema changes preserve acquisition, authority, relation, and availability history;
 - absence in partial API/export data never creates unproven deletion;
 - secrets and large blobs use protected storage/reference mechanisms.
 
@@ -490,7 +490,7 @@ When implementation exists, include applicable tests for:
 - unknown export categories and absence-without-deletion;
 - provider write idempotency and uncertain results;
 - availability/tombstone states;
-- outbox/inbox replay and migrations.
+- outbox/inbox replay and schema initialization.
 
 Use synthetic/redacted fixtures. Do not depend on a live personal Threads account in normal tests.
 
@@ -505,7 +505,7 @@ Use a workspace changeset when changing:
 - OAuth/callback/scopes;
 - media/BlobStore contracts;
 - Data Export completeness semantics;
-- deployment secrets or migration/cutover behavior.
+- deployment secrets or schema/import cutover behavior.
 
 List producer/consumer compatibility, rollout, rollback, privacy, reprocessing/reindexing, and user-visible authority impact.
 
@@ -534,4 +534,4 @@ A task is complete only when:
 - provider writes require separate scope, intent, idempotency, and audit;
 - normalized events preserve provenance;
 - relevant security/import/resolution tests pass;
-- contracts, migrations, telemetry, and cross-repository rollout are documented.
+- contracts, schema, telemetry, and cross-repository rollout are documented.

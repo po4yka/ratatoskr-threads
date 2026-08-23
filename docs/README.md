@@ -4,7 +4,7 @@
 - `REQUIREMENTS.md` — capability and archive requirements.
 - `DOMAIN.md` — posts, threads, relations, captures, acquisition, and authority.
 - `INTERFACES.md` — provider, capture, import, social, and Knowledge boundaries.
-- `DATA_MODEL.md` — `threads_archive` schema.
+- `DATA_MODEL.md` — planned `threads_archive` schema.
 - `THREAT_MODEL.md` — OAuth, privacy, relation, archive, and write risks.
 - `TESTING.md` — capability, relation, capture, importer, and privacy tests.
 - `IMPLEMENTATION_PLAN.md` — ordered vertical slices.
