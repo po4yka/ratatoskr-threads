@@ -2,7 +2,7 @@
 
 `ratatoskr-threads` is the Threads account and capture bounded context for Ratatoskr. It combines official user-authorized account capabilities with explicit capture of public posts, official public representations, and versioned Data Export imports.
 
-> **Status:** implementation plan item 1 is complete: a Rust service runs locally against PostgreSQL with typed strict configuration, structured telemetry, operator health routes (`/health/live`, `/health/ready`, `/metrics`, `/version`), typed errors, and the first-version `threads_archive` schema applied at startup. Account connection, capture intake and resolution, Data Export import, and events described below are planned and are not implemented yet.
+> **Status:** implementation plan items 1 and 2 are complete: a Rust service runs locally against PostgreSQL with typed strict configuration, structured telemetry, operator health routes (`/health/live`, `/health/ready`, `/metrics`, `/version`), typed errors, and the first-version `threads_archive` schema applied at startup; the capability matrix and provenance/relation contracts are defined in code (see `docs/CAPABILITY_MATRIX.md`). Account connection, capture intake and resolution, Data Export import, and events described below are planned and are not implemented yet.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -67,9 +67,11 @@ The service does not use user passwords, server-side browser cookies, hidden boo
 Every source records how it was acquired and what it proves:
 
 ```text
-acquisition = OfficialApi | ShareExtension | BrowserExtension | TelegramCapture | DataExport | LegacyImport
-saved_authority = ExplicitUserCapture | ExportObservation | Unknown
+acquisition = OfficialApi | ShareExtension | BrowserExtension | TelegramCapture | PublicResolution | DataExport | LegacyImport
+saved_authority = ExplicitUserCapture | AuthoritativePlatformState | ExportObservation | LegacyObservation
 ```
+
+The saved-authority vocabulary equals the published `ratatoskr-social-contracts` grammar value for value; `TelegramCapture` is the documented Threads extension (see `docs/CAPABILITY_MATRIX.md`). What each acquisition mode may prove is fixed by its authority ceiling in the capability matrix.
 
 A typical captured post is represented as:
 
@@ -105,10 +107,11 @@ inbox_events
 
 Rows are written by the capabilities of later implementation plan items; the schema vocabulary is
 already enforced: acquisition methods (`official_api | share_extension | browser_extension |
-telegram_capture | data_export | legacy_import`) and saved authorities (`explicit_user_capture |
-export_observation | unknown`) are closed CHECK constraints, so a capture cannot be stored as
-authoritative native platform state. Large export archives, media, raw API/oEmbed responses, and
-unknown provider records are stored in the content-addressed BlobStore.
+telegram_capture | public_resolution | data_export | legacy_import`) and saved authorities
+(`explicit_user_capture | export_observation | authoritative_platform_state | legacy_observation`)
+are closed CHECK constraints aligned with the published social-contract grammar, so a capture
+cannot be stored as native Saved-list state. Large export archives, media, raw API/oEmbed
+responses, and unknown provider records are stored in the content-addressed BlobStore.
 
 ## Capture flow
 
@@ -279,4 +282,4 @@ Planned: `ratatoskr-workspace` will pin Threads with compatible social contracts
 
 ## Project status
 
-Implementation plan item 1 exists: the service binary runs locally against PostgreSQL with health endpoints and an owned `threads_archive` schema (see DEVELOPMENT.md for commands). No OAuth flow, resolver, importer, or event publishing exists yet — those are plan items 2 through 9.
+Implementation plan items 1 and 2 exist: the service binary runs locally against PostgreSQL with health endpoints and an owned `threads_archive` schema, and the capability matrix with provenance and relation contracts is defined in code (`crates/threads-archive` `capability` and `relation` modules; see DEVELOPMENT.md for commands). No OAuth flow, resolver, importer, or event publishing exists yet — those are plan items 3 through 9.

@@ -135,10 +135,11 @@ create table threads_archive.posts (
     constraint posts_acquisition_method_check
         check (acquisition_method in
             ('official_api', 'share_extension', 'browser_extension', 'telegram_capture',
-             'data_export', 'legacy_import')),
+             'public_resolution', 'data_export', 'legacy_import')),
     constraint posts_saved_authority_check
         check (saved_authority in
-            ('explicit_user_capture', 'export_observation', 'unknown')),
+            ('explicit_user_capture', 'export_observation', 'authoritative_platform_state',
+             'legacy_observation')),
     constraint posts_upstream_status_check
         check (upstream_status in
             ('active', 'deleted', 'private_or_inaccessible', 'author_unavailable',
@@ -149,10 +150,16 @@ comment on table threads_archive.posts is
     'Normalized post sources with mandatory acquisition and saved-authority provenance.';
 
 comment on constraint posts_acquisition_method_check on threads_archive.posts is
-    'How this record was obtained. Closed vocabulary; never silently upgraded.';
+    'How this record was obtained. Closed vocabulary; never silently upgraded. The values equal '
+    'the published social-contract grammar plus telegram_capture, the documented Threads '
+    'capture-client lane.';
 comment on constraint posts_saved_authority_check on threads_archive.posts is
-    'What the acquisition proves about saved state. Threads exposes no native Saved surface, '
-    'so there is deliberately no authoritative-platform-state value to store.';
+    'What the acquisition proves about saved state, equal to the published social-contract '
+    'grammar value for value: explicit_user_capture and public_resolution records may never '
+    'exceed explicit_user_capture; official_api own-account records may carry '
+    'authoritative_platform_state; exports prove export_observation; monolith migrations prove '
+    'legacy_observation. Threads exposes no native Saved surface, so no value asserts '
+    'membership in one.';
 
 -- ---------------------------------------------------------------------------------------------
 -- post_relations
@@ -169,12 +176,18 @@ create table threads_archive.post_relations (
     constraint post_relations_child_post_id_fkey foreign key (child_post_id)
         references threads_archive.posts (post_id),
     constraint post_relations_relation_kind_check
-        check (relation_kind in ('reply', 'quote', 'repost'))
+        check (relation_kind ~ '^[a-z][a-z0-9_]{0,31}$')
 );
 
 comment on table threads_archive.post_relations is
     'Reply, quote, and repost edges between provider posts, keyed by stable external identity. '
     'An unavailable parent does not invalidate the captured child; the relation stays stored.';
+
+comment on constraint post_relations_relation_kind_check on threads_archive.post_relations is
+    'The published social-contract relation-kind grammar: lowercase letters, digits, and '
+    'underscores, starting with a letter, at most 32 characters. reply, quote, and repost are '
+    'the kinds modelled today; a well-formed provider edge kind beyond them is preserved '
+    'losslessly instead of being refused or misfiled.';
 
 -- ---------------------------------------------------------------------------------------------
 -- media
@@ -237,10 +250,11 @@ create table threads_archive.captures (
     constraint captures_acquisition_method_check
         check (acquisition_method in
             ('official_api', 'share_extension', 'browser_extension', 'telegram_capture',
-             'data_export', 'legacy_import')),
+             'public_resolution', 'data_export', 'legacy_import')),
     constraint captures_saved_authority_check
         check (saved_authority in
-            ('explicit_user_capture', 'export_observation', 'unknown')),
+            ('explicit_user_capture', 'export_observation', 'authoritative_platform_state',
+             'legacy_observation')),
     constraint captures_client_source_check
         check (client_source in
             ('ios_share_extension', 'android_share_target', 'browser_extension', 'telegram')),
@@ -252,10 +266,13 @@ comment on table threads_archive.captures is
     'Explicit user captures. post_id stays open while the item is unresolved or unavailable.';
 
 comment on constraint captures_acquisition_method_check on threads_archive.captures is
-    'How the capture reached this service. Closed vocabulary; enforced by the database.';
+    'How the capture reached this service. Closed vocabulary; enforced by the database. The '
+    'values equal the published social-contract grammar plus telegram_capture, the documented '
+    'Threads capture-client lane.';
 comment on constraint captures_saved_authority_check on threads_archive.captures is
-    'The authority the capture proves. ExplicitUserCapture is the honest ceiling for a share; '
-    'no value here may claim native platform state.';
+    'The authority the capture proves, equal to the published social-contract grammar value for '
+    'value. ExplicitUserCapture is the honest ceiling for a share; no value here may claim '
+    'membership in a native platform Saved list.';
 
 -- ---------------------------------------------------------------------------------------------
 -- capture_resolutions

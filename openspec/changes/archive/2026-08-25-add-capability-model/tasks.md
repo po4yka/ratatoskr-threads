@@ -1,0 +1,26 @@
+## 1. Failing tests
+
+- [x] 1.1 Add `crates/threads-archive/tests/capability.rs` with tests named for the `capability-model` scenarios, against a skeleton `src/capability.rs` whose lookups return placeholder values so failures are assertion-level: each of the five modes resolves with its documented wire-method set, authority ceiling, and an explicit support status; no mode reports `Supported`; native Saved-list synchronization reports `NotSupported` with the documented reason; only `OwnAccountSync` carries `authoritative_platform_state`; the local acquisition-method set equals the recorded `ratatoskr-social-contracts@fb88f94` vocabulary plus exactly `telegram_capture` with every method owned by one mode; the reachable saved-authority set equals the contract vocabulary; applying any upstream availability value to any preservation state changes nothing. Verification: `cargo test -p ratatoskr-threads-archive --test capability --locked` fails on the stated assertions, not on a compile error.
+- [x] 1.2 Add `crates/threads-archive/tests/relation.rs` against a skeleton `src/relation.rs`: `reply`, `quote`, and `repost` parse and round-trip; an unknown well-formed kind such as `mention` parses, round-trips unchanged, and differs from every documented kind; malformed tokens (uppercase, empty, leading digit or underscore, 33 characters) fail naming the violated rule; a reply relation carries child-to-target direction with the parent's provider id; an unresolved target preserves provider identity evidence without synthesizing content. Verification: `cargo test -p ratatoskr-threads-archive --test relation --locked` fails on the stated assertions.
+- [x] 1.3 Extend `crates/threads-archive/tests/schema.rs`: `public_resolution_is_accepted_on_provenance_tables` (both CHECKs refuse it today), `the_former_unknown_authority_value_is_refused` (`unknown` is accepted today), and relation-kind grammar scenarios inserting a `post_relations` edge with kind `mention` (refused today) and with malformed kinds (also refused today, so assert the grammar distinguishes them once widened). Verification: `cargo test -p ratatoskr-threads-archive --test schema --locked` fails exactly on those new scenarios while the pre-existing schema tests stay green.
+
+## 2. Schema alignment
+
+- [x] 2.1 Edit `schema.sql` in place: add `public_resolution` to `posts_acquisition_method_check` and `captures_acquisition_method_check`; replace `unknown` with `legacy_observation` and add `authoritative_platform_state` in both saved-authority CHECKs; open `post_relations_relation_kind_check` to `relation_kind ~ '^[a-z][a-z0-9_]{0,31}$'`; update the constraint comments to state the contract alignment. Verification: `cargo test -p ratatoskr-threads-archive --test schema --locked` green.
+
+## 3. Capability constants
+
+- [x] 3.1 Implement `src/capability.rs` until green: `AcquisitionMode`, `SupportStatus`, `SavedAuthority`, `UpstreamAvailability`, `PreservationState`, per-mode capability lookup (wire methods, authority ceiling, support status), `NATIVE_SAVED_LIST_SYNC` with its reason string, and `retention_after_observation`; export through `lib.rs`. Verification: `cargo test -p ratatoskr-threads-archive --test capability --locked` green.
+
+## 4. Relation contract
+
+- [x] 4.1 Implement `src/relation.rs` until green: validated open `RelationKind` token matching the published grammar, `PostRelation` with explicit direction and provider-id targeting, and `RelationTarget::Resolved`/`UnresolvedTarget` preserving unresolved parents; export through `lib.rs`. Verification: `cargo test -p ratatoskr-threads-archive --test relation --locked` green.
+
+## 5. Alignment review and documentation
+
+- [x] 5.1 Write `docs/CAPABILITY_MATRIX.md`: the matrix (mode × support × wire methods × authority ceiling), the native-Saved non-capability, authority rules in prose, the upstream-versus-preservation boundary including why Threads needs no collapse function, and the alignment review against `ratatoskr-social-contracts@fb88f94` covering the fixed gaps (`public_resolution`, authority grammar, open relation kinds) and remaining gaps with dispositions (`telegram_capture` upstreaming, contracts-crate dependency deferred to event publication, unresolved-target storage owned by plan item 4). Update the README.md authority summary. This task cannot start from a failing test: documentation.
+- [x] 5.2 Confirm every spec scenario added by this change names the test that executes it and that no documented behavior contradicts README.md, DEVELOPMENT.md, or docs/DOMAIN.md; fix prose drift found (AGENTS.md representative vocabularies aligned; DOMAIN/DATA_MODEL/REQUIREMENTS carry no value lists). This task cannot start from a failing test: documentation consistency.
+
+## 6. Full gate
+
+- [x] 6.1 Run the complete gate from DEVELOPMENT.md on a clean tree — `git diff --check`, `openspec validate --all --strict`, `openspec validate --archived`, `cargo fetch --locked`, `cargo deny --locked check`, `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo build --workspace --locked`, `cargo test --workspace --locked`, `cargo test --workspace --locked --doc`, `cargo build --workspace --locked --release` — and record the results. Verification: every command exits zero.
