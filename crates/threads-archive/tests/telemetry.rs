@@ -1,0 +1,51 @@
+//! Telemetry bootstrap: the executable form of the service-runtime spec.
+
+use ratatoskr_threads_archive::config::TelemetryConfig;
+use ratatoskr_threads_archive::init_telemetry;
+use ratatoskr_threads_archive::telemetry;
+
+#[test]
+fn initialization_succeeds_once_and_second_call_is_typed_error() {
+    let config = TelemetryConfig {
+        log_filter: "info".to_owned(),
+    };
+
+    init_telemetry(&config).expect("the first initialization must succeed");
+    let error = init_telemetry(&config)
+        .expect_err("a second initialization in one process must be refused");
+    assert!(
+        error.to_string().contains("telemetry"),
+        "the failure must be the typed telemetry refusal: {error}"
+    );
+    assert!(
+        matches!(
+            error,
+            ratatoskr_threads_archive::TelemetryError::AlreadyInstalled(_)
+        ),
+        "the second refusal must be the already-installed variant: {error:?}"
+    );
+}
+
+#[test]
+fn emitted_records_parse_as_json_with_identity_fields() {
+    let record = telemetry::render_startup_record();
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&record).expect("the startup record must parse as JSON");
+
+    assert_eq!(
+        parsed["fields"]["service_name"],
+        telemetry::SERVICE_NAME,
+        "records carry the service identity"
+    );
+    assert_eq!(
+        parsed["fields"]["version"],
+        telemetry::VERSION,
+        "records carry the crate version"
+    );
+    assert_eq!(
+        parsed["fields"]["git_sha"],
+        telemetry::GIT_SHA,
+        "records carry the build's git SHA"
+    );
+}

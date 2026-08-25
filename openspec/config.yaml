@@ -8,9 +8,9 @@ context: |
 
   Stack: Rust/Tokio, Reqwest/Rustls, OAuth, SQLx/PostgreSQL, safe archive import, BlobStore, NATS, provider fixtures and WireMock, tracing, testcontainers.
 
-  This repository holds no code yet. Its documents describe intent; a change here plans behaviour, and the first code arrives with its own ci.yml, its lint configuration carrying the size limits, and its tests.
+  Implementation plan item 1 exists: a Rust/Tokio service with strict typed configuration, structured telemetry, operator health routes, typed errors, and the first-version `threads_archive` schema applied at startup. Account OAuth, capture intake and resolution, public oEmbed, Data Export import, and eventing are still intent only; a change here plans the next behaviour.
 
-  The current docs-only gate is the fenced block in DEVELOPMENT.md: git diff --check, openspec validate --all --strict, and openspec validate --archived. .github/workflows/openspec.yml runs the two OpenSpec checks in CI. No product ci.yml exists yet; the first product manifest adds one alongside the unchanged OpenSpec checks. .github/workflows/fleet.yml checks that product CI invokes a test and that a Rust or Node manifest has its language-specific lint configuration; it does not prove that CI invokes the linter.
+  The repository has two gates. The docs-only/OpenSpec gate is the fenced block in DEVELOPMENT.md: git diff --check, openspec validate --all --strict, and openspec validate --archived; `.github/workflows/openspec.yml` runs the two OpenSpec commands in CI. The product gate is `.github/workflows/ci.yml`, whose cargo command list and DEVELOPMENT.md's "### Rust — also the CI gate" block are one list enforced by a drift guard step; the suite needs PostgreSQL (`compose.yaml` locally, a service container in CI). `.github/workflows/fleet.yml` keeps checking its fleet invariants now that a manifest exists.
 
   Development status, binding and overriding anything that plans otherwise: one version only — no v2, no version negotiation, no deprecation window; no database migrations — a schema change edits the schema definition in place; the product is Ratatoskr and never "Ratatoskr Next". Only the repository owner changes this status.
 

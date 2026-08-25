@@ -1,0 +1,35 @@
+[package]
+name = "ratatoskr-threads-archive-service"
+description = "Ratatoskr Threads Archive service process."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "ratatoskr_threads_archive_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ratatoskr-threads-archive"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+ratatoskr-threads-archive = { path = "../../crates/threads-archive" }
+secrecy.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+http-body-util.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+ratatoskr-threads-archive = { path = "../../crates/threads-archive", features = ["test-support"] }
+tower.workspace = true
+
+[lints]
+workspace = true
