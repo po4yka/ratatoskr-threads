@@ -32,16 +32,57 @@ const INSERT_CAPTURE: &str = "insert into threads_archive.captures \
       saved_authority, client_source, status, captured_at) \
      values ($1, $2, $3, $4, $5, $6, $7, $8, now())";
 
-const ACQUISITIONS: [&str; 6] = [
+const INSERT_POST: &str = "insert into threads_archive.posts \
+     (post_id, permalink, post_kind, acquisition_method, saved_authority, upstream_status) \
+     values ($1, $2, 'post', $3, $4, 'active')";
+
+const INSERT_RELATION: &str = "insert into threads_archive.post_relations \
+     (relation_id, parent_post_id, child_post_id, relation_kind) \
+     values ($1, $2, $3, $4)";
+
+const ACQUISITIONS: [&str; 7] = [
     "official_api",
     "share_extension",
     "browser_extension",
     "telegram_capture",
+    "public_resolution",
     "data_export",
     "legacy_import",
 ];
 
-const AUTHORITIES: [&str; 3] = ["explicit_user_capture", "export_observation", "unknown"];
+const AUTHORITIES: [&str; 4] = [
+    "explicit_user_capture",
+    "export_observation",
+    "authoritative_platform_state",
+    "legacy_observation",
+];
+
+/// Insert one minimal post row and return its id.
+#[expect(
+    clippy::expect_used,
+    reason = "integration-test helper outside any single test fn: an unanswered post insert is the failure"
+)]
+async fn insert_post(
+    pool: &sqlx::PgPool,
+    permalink: &str,
+    acquisition_method: &str,
+    saved_authority: &str,
+) -> Uuid {
+    let post_id = Uuid::now_v7();
+    let inserted = sqlx::query(INSERT_POST)
+        .bind(post_id)
+        .bind(permalink)
+        .bind(acquisition_method)
+        .bind(saved_authority)
+        .execute(pool)
+        .await
+        .expect("the marker post inserts");
+    assert!(
+        inserted.rows_affected() == 1,
+        "the marker post must insert exactly one row"
+    );
+    post_id
+}
 
 #[expect(
     clippy::expect_used,
@@ -208,6 +249,147 @@ async fn catalog_shows_zero_cross_schema_foreign_keys() {
     .expect("the catalog query must answer");
 
     assert_eq!(crossing, 0, "no foreign key may leave threads_archive");
+
+    test.cleanup().await.expect("cleanup must drop");
+}
+
+#[tokio::test]
+async fn public_resolution_is_accepted_on_provenance_tables() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let pool = test.database.pool();
+
+    let capture = sqlx::query(INSERT_CAPTURE)
+        .bind(Uuid::now_v7())
+        .bind(Uuid::now_v7())
+        .bind(Uuid::now_v7().to_string())
+        .bind("https://www.threads.net/@example/post/example")
+        .bind("public_resolution")
+        .bind("explicit_user_capture")
+        .bind("telegram")
+        .bind("accepted")
+        .execute(pool)
+        .await;
+    assert!(
+        capture.is_ok(),
+        "public_resolution must be accepted on captures: {:?}",
+        capture.err().map(|e| e.to_string())
+    );
+
+    let post = sqlx::query(INSERT_POST)
+        .bind(Uuid::now_v7())
+        .bind("https://www.threads.net/@example/post/resolved")
+        .bind("public_resolution")
+        .bind("explicit_user_capture")
+        .execute(pool)
+        .await;
+    assert!(
+        post.is_ok(),
+        "public_resolution must be accepted on posts: {:?}",
+        post.err().map(|e| e.to_string())
+    );
+
+    test.cleanup().await.expect("cleanup must drop");
+}
+
+#[tokio::test]
+async fn the_former_unknown_authority_value_is_refused() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let pool = test.database.pool();
+
+    let refused = sqlx::query(INSERT_CAPTURE)
+        .bind(Uuid::now_v7())
+        .bind(Uuid::now_v7())
+        .bind(Uuid::now_v7().to_string())
+        .bind("https://www.threads.net/@example/post/example")
+        .bind("share_extension")
+        .bind("unknown")
+        .bind("browser_extension")
+        .bind("accepted")
+        .execute(pool)
+        .await;
+    let error = refused.expect_err("the former unknown authority must be refused");
+    assert!(
+        error.to_string().contains("captures_saved_authority_check"),
+        "the named CHECK constraint must reject it: {error}"
+    );
+
+    test.cleanup().await.expect("cleanup must drop");
+}
+
+#[tokio::test]
+async fn a_well_formed_relation_kind_beyond_the_documented_three_is_accepted() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let pool = test.database.pool();
+
+    let parent = insert_post(
+        pool,
+        "https://www.threads.net/@example/post/parent",
+        "public_resolution",
+        "explicit_user_capture",
+    )
+    .await;
+    let child = insert_post(
+        pool,
+        "https://www.threads.net/@example/post/child",
+        "share_extension",
+        "explicit_user_capture",
+    )
+    .await;
+
+    let inserted = sqlx::query(INSERT_RELATION)
+        .bind(Uuid::now_v7())
+        .bind(parent)
+        .bind(child)
+        .bind("mention")
+        .execute(pool)
+        .await;
+    assert!(
+        inserted.is_ok(),
+        "a well-formed kind beyond the documented three must be accepted: {:?}",
+        inserted.err().map(|e| e.to_string())
+    );
+
+    test.cleanup().await.expect("cleanup must drop");
+}
+
+#[tokio::test]
+async fn a_malformed_relation_kind_is_refused_by_named_check() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let pool = test.database.pool();
+
+    let parent = insert_post(
+        pool,
+        "https://www.threads.net/@example/post/parent",
+        "share_extension",
+        "explicit_user_capture",
+    )
+    .await;
+    let child = insert_post(
+        pool,
+        "https://www.threads.net/@example/post/child",
+        "share_extension",
+        "explicit_user_capture",
+    )
+    .await;
+
+    let too_long = format!("{}{}", "a", "b".repeat(32));
+    for malformed in ["Mention", "", "1mention", "_mention", too_long.as_str()] {
+        let refused = sqlx::query(INSERT_RELATION)
+            .bind(Uuid::now_v7())
+            .bind(parent)
+            .bind(child)
+            .bind(malformed)
+            .execute(pool)
+            .await;
+        let error = refused.expect_err("a malformed relation kind must be refused");
+        assert!(
+            error
+                .as_database_error()
+                .map(|database| database.constraint())
+                .is_some_and(|constraint| constraint == Some("post_relations_relation_kind_check")),
+            "the named CHECK constraint must reject {malformed:?}: {error}"
+        );
+    }
 
     test.cleanup().await.expect("cleanup must drop");
 }

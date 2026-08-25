@@ -163,6 +163,7 @@ OfficialApi
 ShareExtension
 BrowserExtension
 TelegramCapture
+PublicResolution
 DataExport
 LegacyImport
 ```
@@ -171,8 +172,9 @@ Representative saved authority:
 
 ```text
 ExplicitUserCapture
+AuthoritativePlatformState
 ExportObservation
-Unknown
+LegacyObservation
 ```
 
 Rules:
@@ -183,6 +185,7 @@ Rules:
 - Deleting a local archive record does not imply a native unsave.
 - Preserve provider publication time separately.
 - Preserve acquisition/authority through events, analysis, search, and UI contracts.
+- Native saved state stays unknown unless an official surface proves otherwise; the stored authority vocabulary has no value that asserts native Saved-list membership.
 
 ## Official account lane
 
