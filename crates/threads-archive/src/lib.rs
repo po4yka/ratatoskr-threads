@@ -5,15 +5,20 @@
 //!
 //! The foundation owns process configuration, telemetry bootstrap, and
 //! application of the first-version `threads_archive` schema. Account
-//! connection, explicit captures, public resolution, and Data Export imports
-//! arrive with later implementation plan items.
+//! connection, public resolution, and Data Export imports arrive with later
+//! implementation plan items; explicit-capture intake lives in the `capture`
+//! module.
 
 /// Provenance semantics: the capability matrix, acquisition modes and their
 /// authority ceilings, and the upstream-versus-preservation boundary.
 pub mod capability;
+/// Explicit capture intake: validated requests, stored capture records, and
+/// truthful unavailability observations.
+pub mod capture;
 pub mod config;
 /// The owned `PostgreSQL` pool and the embedded `threads_archive` schema.
 pub mod database;
+pub mod permalink;
 /// The reply, quote, and repost edge contract with its open relation-kind
 /// grammar aligned to the published social contracts.
 pub mod relation;

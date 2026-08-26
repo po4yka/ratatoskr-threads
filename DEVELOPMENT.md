@@ -3,7 +3,7 @@
 > Status: Active development
 > Last reviewed: 2026-08-25
 
-Implementation plan item 1 is implemented: a Rust/Tokio service with typed strict configuration, structured telemetry, operator health routes, typed errors, and the first-version `threads_archive` schema applied at startup. Account OAuth, capture intake and resolution, Data Export import, eventing, and provider adapters are not implemented yet.
+Implementation plan items 1 through 3 are implemented: a Rust/Tokio service with typed strict configuration, structured telemetry, operator health routes, typed errors, and the first-version `threads_archive` schema applied at startup, plus explicit-capture intake in the library — permalink canonicalization (`crates/threads-archive` `permalink`), idempotent capture records with pinned provenance, and truthful unavailable fallbacks (`capture`). Public resolution and relation normalization, event publication, account OAuth, own-post synchronization, and Data Export import are not implemented yet.
 
 ## Intended toolchain
 

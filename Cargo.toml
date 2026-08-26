@@ -30,6 +30,7 @@ sqlx = { version = "=0.8.6", default-features = false, features = [
     "tls-rustls-ring",
     "postgres",
     "uuid",
+    "chrono",
 ] }
 
 # ---- configuration and secrets ----
@@ -40,6 +41,11 @@ tracing                     = "=0.1.44"
 tracing-subscriber          = { version = "=0.3.23", default-features = false, features = ["std", "registry", "env-filter", "fmt", "json"] }
 metrics                     = "=0.24.6"
 metrics-exporter-prometheus = { version = "=0.18.3", default-features = false }
+
+# ---- time ----
+# `clock` + `std` only: `timestamptz` maps to `DateTime<Utc>` through sqlx's
+# `chrono` feature; later OAuth expiry work reuses the same mapping.
+chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
 
 # ---- identifiers ----
 # `v7` because ratatoskr-contracts mints UUIDv7 for internally minted identity, and the database

@@ -51,12 +51,12 @@ impl AcquisitionMode {
             Self::LegacyImport => SavedAuthority::LegacyObservation,
         };
         let status = match self {
-            // Capture intake is implementation plan item 3; public resolution and relation
-            // normalization is item 4, event publication item 5, OAuth discovery item 6,
-            // own-post sync item 7, Data Export import item 8. Legacy migration has no
-            // dedicated item yet and stays `Planned`.
-            Self::ExplicitCapture
-            | Self::PublicResolution
+            // Explicit capture landed with implementation plan item 3. Public resolution
+            // and relation normalization is item 4, event publication item 5, OAuth
+            // discovery item 6, own-post sync item 7, Data Export import item 8.
+            // Legacy migration has no dedicated item yet and stays `Planned`.
+            Self::ExplicitCapture => SupportStatus::Supported,
+            Self::PublicResolution
             | Self::OwnAccountSync
             | Self::DataExport
             | Self::LegacyImport => SupportStatus::Planned,

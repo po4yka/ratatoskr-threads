@@ -237,6 +237,7 @@ create table threads_archive.captures (
     post_id            uuid,
     idempotency_key    text        not null,
     canonical_url      text        not null,
+    original_url       text        not null,
     acquisition_method text        not null,
     saved_authority    text        not null,
     client_source      text        not null,
@@ -263,7 +264,8 @@ create table threads_archive.captures (
 );
 
 comment on table threads_archive.captures is
-    'Explicit user captures. post_id stays open while the item is unresolved or unavailable.';
+    'Explicit user captures. post_id stays open while the item is unresolved or unavailable. '
+    'original_url preserves the submitted URL text byte-for-byte beside the canonical permalink.';
 
 comment on constraint captures_acquisition_method_check on threads_archive.captures is
     'How the capture reached this service. Closed vocabulary; enforced by the database. The '

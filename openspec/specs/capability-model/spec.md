@@ -13,8 +13,12 @@ The library SHALL expose a total lookup that, for each documented acquisition mo
 - **THEN** every lookup succeeds and reports one explicit support status, exactly the wire method values documented for that mode, and the authority ceiling documented for that mode
 
 #### Scenario: No mode claims support while its lane is unimplemented
-- **WHEN** the support statuses of all five acquisition modes are inspected while their implementing plan items are still open
-- **THEN** no mode reports `Supported` and every mode reports `Planned`
+- **WHEN** the support statuses of the acquisition modes whose implementing plan items are still open are inspected
+- **THEN** each of those modes reports `Planned`
+
+#### Scenario: Only implemented lanes claim support
+- **WHEN** the support statuses of all five acquisition modes are inspected
+- **THEN** exactly the modes whose implementing plan items have landed report `Supported` — explicit capture alone today — and every remaining mode reports `Planned`
 
 ### Requirement: The native Saved list is a stated non-capability
 Because no supported provider surface exposes a personal account's native Saved list on Threads, the capability matrix SHALL report native Saved-list synchronization as `NotSupported` together with that reason, and no acquisition mode's authority path SHALL be able to produce a claim that the user's native Saved membership is known from an explicit capture.
