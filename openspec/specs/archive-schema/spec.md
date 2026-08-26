@@ -63,3 +63,10 @@ The `post_relations.relation_kind` column SHALL accept exactly the tokens matchi
 #### Scenario: A malformed relation kind is refused
 - **WHEN** a post-relation edge is inserted with a relation kind violating the grammar, such as an uppercase letter, an empty string, or a 33-character token
 - **THEN** the insert fails with the named CHECK constraint
+
+### Requirement: Public resolution evidence and graph targets are durable schema records
+The first-version `threads_archive` schema SHALL contain a post-revision relation that references one normalized post and one immutable raw object while recording the parser version and observation time. The relation table SHALL represent a directed referencing post, an optional resolved target post, and required target provider identity/permalink evidence so unresolved targets are storable without placeholder posts.
+
+#### Scenario: Fresh schema stores a revision and an unresolved edge
+- **WHEN** the current schema is applied to a fresh database
+- **THEN** a public-resolution revision and a relation with no local target post but target provider identity evidence can both be inserted under their declared constraints

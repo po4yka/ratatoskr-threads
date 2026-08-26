@@ -16,10 +16,11 @@ repository = "https://github.com/po4yka/ratatoskr-threads"
 ratatoskr-threads-archive           = { version = "=0.1.0", path = "crates/threads-archive" }
 
 # ---- async runtime and HTTP ----
-tokio      = { version = "=1.53.1", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio      = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
 axum       = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 tower      = { version = "=0.5.3", features = ["util"] }
 http-body-util = "=0.1.5"
+reqwest    = { version = "=0.12.28", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 
 # ---- persistence ----
 # No `migrate` feature: the schema is one file, `include_str!`d into the binary by
@@ -56,6 +57,7 @@ uuid = { version = "=1.24.1", features = ["v7"] }
 serde      = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 thiserror  = "=2.0.20"
+sha2       = "=0.10.9"
 
 [workspace.lints.rust]
 unsafe_code                   = "forbid"

@@ -19,6 +19,8 @@ pub mod config;
 /// The owned `PostgreSQL` pool and the embedded `threads_archive` schema.
 pub mod database;
 pub mod permalink;
+/// Supported public-resolution parsing and persistence.
+pub mod public_resolution;
 /// The reply, quote, and repost edge contract with its open relation-kind
 /// grammar aligned to the published social contracts.
 pub mod relation;

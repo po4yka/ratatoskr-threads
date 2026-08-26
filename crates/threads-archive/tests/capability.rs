@@ -110,11 +110,14 @@ fn each_mode_resolves_to_its_documented_capability() {
 fn only_implemented_lanes_claim_support() {
     for mode in AcquisitionMode::ALL {
         let status = mode.capability().status;
-        if mode == AcquisitionMode::ExplicitCapture {
+        if matches!(
+            mode,
+            AcquisitionMode::ExplicitCapture | AcquisitionMode::PublicResolution
+        ) {
             assert_eq!(
                 status,
                 SupportStatus::Supported,
-                "explicit capture landed with implementation plan item 3"
+                "implemented capture and public-resolution lanes must report support"
             );
         } else {
             assert_eq!(
@@ -129,8 +132,8 @@ fn only_implemented_lanes_claim_support() {
         .filter(|mode| mode.capability().status == SupportStatus::Supported)
         .count();
     assert_eq!(
-        supported, 1,
-        "exactly one lane - explicit capture - may claim support today"
+        supported, 2,
+        "exactly explicit capture and public resolution may claim support today"
     );
 }
 

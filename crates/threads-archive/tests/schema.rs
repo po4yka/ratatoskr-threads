@@ -11,7 +11,7 @@ use ratatoskr_threads_archive::Database;
 use ratatoskr_threads_archive::test_support::{TestDatabase, admin_url};
 
 /// The relations AGENTS.md's persistence vocabulary declares, no more, no fewer.
-const DECLARED_TABLES: [&str; 13] = [
+const DECLARED_TABLES: [&str; 14] = [
     "accounts",
     "captures",
     "capture_resolutions",
@@ -22,6 +22,7 @@ const DECLARED_TABLES: [&str; 13] = [
     "media",
     "outbox_events",
     "post_relations",
+    "post_revisions",
     "posts",
     "raw_objects",
     "tombstones",
@@ -37,8 +38,8 @@ const INSERT_POST: &str = "insert into threads_archive.posts \
      values ($1, $2, 'post', $3, $4, 'active')";
 
 const INSERT_RELATION: &str = "insert into threads_archive.post_relations \
-     (relation_id, parent_post_id, child_post_id, relation_kind) \
-     values ($1, $2, $3, $4)";
+     (relation_id, referencing_post_id, target_post_id, target_provider_post_id, target_permalink, relation_kind) \
+     values ($1, $2, $3, $4, $5, $6)";
 
 const ACQUISITIONS: [&str; 7] = [
     "official_api",
@@ -343,8 +344,10 @@ async fn a_well_formed_relation_kind_beyond_the_documented_three_is_accepted() {
 
     let inserted = sqlx::query(INSERT_RELATION)
         .bind(Uuid::now_v7())
-        .bind(parent)
         .bind(child)
+        .bind(parent)
+        .bind("parent-provider")
+        .bind(Option::<String>::None)
         .bind("mention")
         .execute(pool)
         .await;
@@ -381,8 +384,10 @@ async fn a_malformed_relation_kind_is_refused_by_named_check() {
     for malformed in ["Mention", "", "1mention", "_mention", too_long.as_str()] {
         let refused = sqlx::query(INSERT_RELATION)
             .bind(Uuid::now_v7())
-            .bind(parent)
             .bind(child)
+            .bind(parent)
+            .bind("parent-provider")
+            .bind(Option::<String>::None)
             .bind(malformed)
             .execute(pool)
             .await;

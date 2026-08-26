@@ -95,6 +95,7 @@ create table threads_archive.raw_objects (
     blob_ref      text        not null,
     content_hash  bytea       not null,
     byte_size     bigint      not null,
+    media_type    text        not null,
     observed_at   timestamptz not null,
     constraint raw_objects_object_kind_check
         check (object_kind in
@@ -149,6 +150,21 @@ create table threads_archive.posts (
 comment on table threads_archive.posts is
     'Normalized post sources with mandatory acquisition and saved-authority provenance.';
 
+create table threads_archive.post_revisions (
+    revision_id    uuid        primary key,
+    post_id        uuid        not null,
+    raw_object_id  uuid        not null,
+    parser_version text        not null,
+    observed_at    timestamptz not null,
+    constraint post_revisions_post_id_fkey foreign key (post_id)
+        references threads_archive.posts (post_id),
+    constraint post_revisions_raw_object_id_fkey foreign key (raw_object_id)
+        references threads_archive.raw_objects (raw_object_id)
+);
+
+comment on table threads_archive.post_revisions is
+    'Append-only normalized projections of immutable public/provider raw evidence.';
+
 comment on constraint posts_acquisition_method_check on threads_archive.posts is
     'How this record was obtained. Closed vocabulary; never silently upgraded. The values equal '
     'the published social-contract grammar plus telegram_capture, the documented Threads '
@@ -166,22 +182,25 @@ comment on constraint posts_saved_authority_check on threads_archive.posts is
 -- ---------------------------------------------------------------------------------------------
 
 create table threads_archive.post_relations (
-    relation_id     uuid primary key,
-    parent_post_id  uuid not null,
-    child_post_id   uuid not null,
-    relation_kind   text not null,
-    constraint post_relations_parent_child_kind_key unique (parent_post_id, child_post_id, relation_kind),
-    constraint post_relations_parent_post_id_fkey foreign key (parent_post_id)
+    relation_id              uuid primary key,
+    referencing_post_id      uuid not null,
+    target_post_id           uuid,
+    target_provider_post_id  text not null,
+    target_permalink         text,
+    relation_kind            text not null,
+    constraint post_relations_referencing_target_kind_key
+        unique (referencing_post_id, target_provider_post_id, relation_kind),
+    constraint post_relations_referencing_post_id_fkey foreign key (referencing_post_id)
         references threads_archive.posts (post_id),
-    constraint post_relations_child_post_id_fkey foreign key (child_post_id)
+    constraint post_relations_target_post_id_fkey foreign key (target_post_id)
         references threads_archive.posts (post_id),
     constraint post_relations_relation_kind_check
         check (relation_kind ~ '^[a-z][a-z0-9_]{0,31}$')
 );
 
 comment on table threads_archive.post_relations is
-    'Reply, quote, and repost edges between provider posts, keyed by stable external identity. '
-    'An unavailable parent does not invalidate the captured child; the relation stays stored.';
+    'Directed reply, quote, and repost edges from referencing post to stable target provider identity. '
+    'An unavailable target remains an explicit relation without an invented post.';
 
 comment on constraint post_relations_relation_kind_check on threads_archive.post_relations is
     'The published social-contract relation-kind grammar: lowercase letters, digits, and '

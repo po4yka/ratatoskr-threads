@@ -16,9 +16,9 @@ The library SHALL expose a total lookup that, for each documented acquisition mo
 - **WHEN** the support statuses of the acquisition modes whose implementing plan items are still open are inspected
 - **THEN** each of those modes reports `Planned`
 
-#### Scenario: Only implemented lanes claim support
+#### Scenario: Exactly the implemented lanes report supported
 - **WHEN** the support statuses of all five acquisition modes are inspected
-- **THEN** exactly the modes whose implementing plan items have landed report `Supported` — explicit capture alone today — and every remaining mode reports `Planned`
+- **THEN** exactly `ExplicitCapture` and `PublicResolution` report `Supported` and every remaining mode reports `Planned`
 
 ### Requirement: The native Saved list is a stated non-capability
 Because no supported provider surface exposes a personal account's native Saved list on Threads, the capability matrix SHALL report native Saved-list synchronization as `NotSupported` together with that reason, and no acquisition mode's authority path SHALL be able to produce a claim that the user's native Saved membership is known from an explicit capture.

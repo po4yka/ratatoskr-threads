@@ -3,11 +3,11 @@
 > Status: Active development
 > Last reviewed: 2026-08-25
 
-Implementation plan items 1 through 3 are implemented: a Rust/Tokio service with typed strict configuration, structured telemetry, operator health routes, typed errors, and the first-version `threads_archive` schema applied at startup, plus explicit-capture intake in the library — permalink canonicalization (`crates/threads-archive` `permalink`), idempotent capture records with pinned provenance, and truthful unavailable fallbacks (`capture`). Public resolution and relation normalization, event publication, account OAuth, own-post synchronization, and Data Export import are not implemented yet.
+Implementation plan items 1 through 4 are implemented: a Rust/Tokio service with typed strict configuration, structured telemetry, operator health routes, typed errors, and the first-version `threads_archive` schema applied at startup; explicit-capture intake in the library — permalink canonicalization (`crates/threads-archive` `permalink`), idempotent capture records with pinned provenance, and truthful unavailable fallbacks (`capture`); and public resolution (`public_resolution`). The public resolver is Rustls-only and accepts only approved Threads oEmbed HTTPS surfaces, retains content-addressed raw evidence before append-only parser-versioned revisions, and stores reply/quote structure as directed relation rows with explicit unresolved targets and cycle refusal. Items 5 through 9 — event publication, account OAuth, own-post synchronization, and Data Export import — remain planned.
 
 ## Intended toolchain
 
-Rust/Tokio (pinned by `rust-toolchain.toml` at 1.97.0), SQLx/PostgreSQL, axum, tracing, Prometheus. Planned for later items: Reqwest/Rustls, OAuth, safe archive import, BlobStore, NATS, provider fixtures/WireMock, testcontainers.
+Rust/Tokio (pinned by `rust-toolchain.toml` at 1.97.0), SQLx/PostgreSQL, axum, Reqwest/Rustls, tracing, Prometheus. Planned for later items: OAuth, safe archive import, NATS, provider fixtures/WireMock, testcontainers.
 
 ## Code size limits
 

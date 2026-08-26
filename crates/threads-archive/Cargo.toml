@@ -11,8 +11,11 @@ repository.workspace = true
 chrono.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
+reqwest.workspace = true
 secrecy.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -25,7 +28,6 @@ test-support = []
 
 [dev-dependencies]
 ratatoskr-threads-archive = { path = ".", features = ["test-support"] }
-serde_json.workspace = true
 
 [lints]
 workspace = true
