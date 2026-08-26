@@ -5,9 +5,9 @@
 - **Account connection:** identity, credentials, scopes, capabilities, status.
 - **Post:** provider content node.
 - **Relation:** reply-to, thread-root, quote, repost, or other documented edge.
-- **Capture:** explicit local save request with canonical permalink and context.
-- **Acquisition method:** official API, share/browser capture, Data Export, or legacy import.
-- **Saved authority:** explicit user capture, export observation, or documented provider authority.
+- **Capture:** explicit local save request with canonical permalink and context; the submitted URL text is preserved beside the canonical form.
+- **Acquisition method:** how a source arrived — official API, an explicit capture lane (mobile share target, browser extension, Telegram), public resolution, Data Export, or legacy import.
+- **Saved authority:** explicit user capture, export observation, authoritative platform state, or legacy observation.
 - **Unavailable state:** private, deleted, unsupported, blocked, expired, or unresolved.
 - **Export snapshot:** immutable archive and parser/completeness report.
 

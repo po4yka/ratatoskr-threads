@@ -107,16 +107,31 @@ fn each_mode_resolves_to_its_documented_capability() {
 }
 
 #[test]
-fn no_mode_reports_supported_while_its_lane_is_unimplemented() {
+fn only_implemented_lanes_claim_support() {
     for mode in AcquisitionMode::ALL {
         let status = mode.capability().status;
-        assert_ne!(
-            status,
-            SupportStatus::Supported,
-            "{mode:?} must not claim support before its plan item lands"
-        );
-        assert_eq!(status, SupportStatus::Planned);
+        if mode == AcquisitionMode::ExplicitCapture {
+            assert_eq!(
+                status,
+                SupportStatus::Supported,
+                "explicit capture landed with implementation plan item 3"
+            );
+        } else {
+            assert_eq!(
+                status,
+                SupportStatus::Planned,
+                "{mode:?} must not claim support before its plan item lands"
+            );
+        }
     }
+    let supported = AcquisitionMode::ALL
+        .iter()
+        .filter(|mode| mode.capability().status == SupportStatus::Supported)
+        .count();
+    assert_eq!(
+        supported, 1,
+        "exactly one lane - explicit capture - may claim support today"
+    );
 }
 
 #[test]

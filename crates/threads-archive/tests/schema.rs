@@ -28,9 +28,9 @@ const DECLARED_TABLES: [&str; 13] = [
 ];
 
 const INSERT_CAPTURE: &str = "insert into threads_archive.captures \
-     (capture_id, user_ref, idempotency_key, canonical_url, acquisition_method, \
+     (capture_id, user_ref, idempotency_key, canonical_url, original_url, acquisition_method, \
       saved_authority, client_source, status, captured_at) \
-     values ($1, $2, $3, $4, $5, $6, $7, $8, now())";
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())";
 
 const INSERT_POST: &str = "insert into threads_archive.posts \
      (post_id, permalink, post_kind, acquisition_method, saved_authority, upstream_status) \
@@ -166,6 +166,7 @@ async fn unknown_acquisition_method_is_refused_by_named_check() {
         .bind(Uuid::now_v7())
         .bind(Uuid::now_v7().to_string())
         .bind("https://www.threads.net/@example/post/example")
+        .bind("https://www.threads.net/@example/post/example")
         .bind("carrier_pigeon")
         .bind("explicit_user_capture")
         .bind("ios_share_extension")
@@ -194,6 +195,7 @@ async fn every_documented_authority_value_inserts_including_explicit_user_captur
             .bind(Uuid::now_v7())
             .bind(Uuid::now_v7().to_string())
             .bind("https://www.threads.net/@example/post/example")
+            .bind("https://www.threads.net/@example/post/example")
             .bind(acquisition)
             .bind("explicit_user_capture")
             .bind("ios_share_extension")
@@ -211,6 +213,7 @@ async fn every_documented_authority_value_inserts_including_explicit_user_captur
             .bind(Uuid::now_v7())
             .bind(Uuid::now_v7())
             .bind(Uuid::now_v7().to_string())
+            .bind("https://www.threads.net/@example/post/example")
             .bind("https://www.threads.net/@example/post/example")
             .bind("share_extension")
             .bind(authority)
@@ -263,6 +266,7 @@ async fn public_resolution_is_accepted_on_provenance_tables() {
         .bind(Uuid::now_v7())
         .bind(Uuid::now_v7().to_string())
         .bind("https://www.threads.net/@example/post/example")
+        .bind("https://www.threads.net/@example/post/example")
         .bind("public_resolution")
         .bind("explicit_user_capture")
         .bind("telegram")
@@ -300,6 +304,7 @@ async fn the_former_unknown_authority_value_is_refused() {
         .bind(Uuid::now_v7())
         .bind(Uuid::now_v7())
         .bind(Uuid::now_v7().to_string())
+        .bind("https://www.threads.net/@example/post/example")
         .bind("https://www.threads.net/@example/post/example")
         .bind("share_extension")
         .bind("unknown")

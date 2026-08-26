@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+chrono.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
 secrecy.workspace = true

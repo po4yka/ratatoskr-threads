@@ -6,11 +6,11 @@ Threads' API surface is limited and evolving, and the monolith captured Threads 
 
 ## The matrix
 
-No lane is implemented yet: capture intake is plan item 3, so every mode reports `Planned`, and the matrix stays a commitment device — an implementation item must flip its own row's status with a reviewed test change before any code path can claim it.
+Explicit capture is implemented (plan item 3): intake canonicalizes permalinks, stores captures idempotently with pinned `explicit_user_capture` provenance, and records evidence-class unavailable fallbacks, so its row reports `Supported`. Every other lane reports `Planned`, and the matrix stays a commitment device — an implementation item must flip its own row's status with a reviewed test change before any code path can claim it.
 
 | Mode | Status | Wire acquisition methods | Authority ceiling |
 |---|---|---|---|
-| `ExplicitCapture` | Planned | `share_extension`, `browser_extension`, `telegram_capture` | `explicit_user_capture` |
+| `ExplicitCapture` | Supported | `share_extension`, `browser_extension`, `telegram_capture` | `explicit_user_capture` |
 | `PublicResolution` | Planned | `public_resolution` | `explicit_user_capture` |
 | `OwnAccountSync` | Planned | `official_api` | `authoritative_platform_state` |
 | `DataExport` | Planned | `data_export` | `export_observation` |
