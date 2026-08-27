@@ -238,6 +238,23 @@ knowledge.analysis.completed.v1
 
 Handlers are idempotent under at-least-once delivery. Capture, import, and account-sync results retain separate provenance.
 
+### Platform browser-capture consumer
+
+Threads requires a NATS endpoint at startup and owns the durable pull consumer
+`threads_browser_capture` on `ratatoskr_commands`, filtered to
+`cmd.threads.capture.requested.v1`. Platform preprovisions that consumer; the
+Threads identity can only open it and cannot create broker topology. It accepts only a canonical
+`SocialCaptureRequested` envelope whose provider is `threads`, acquisition is
+`browser_extension`, and saved authority is `explicit_user_capture`. The
+consumer writes its inbox marker, capture record, and a queued
+`platform.operation.reported.v1` outbox fact in one transaction; a duplicate
+command ID has no additional effect.
+
+The consumer does not manufacture terminal unavailable, deleted, or linked-
+article partial outcomes. Those require a supported public-resolution or
+Extractor observation and remain the responsibility of those authoritative
+pipelines.
+
 ## Security invariants
 
 1. No Threads password or user browser cookie is collected.

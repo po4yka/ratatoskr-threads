@@ -12,8 +12,11 @@ deletion/native-Saved assertion. Media policy (item 9) remains planned.
 ## Intended toolchain
 
 Rust/Tokio (pinned by `rust-toolchain.toml` at 1.97.0), SQLx/PostgreSQL, axum, Reqwest/Rustls,
-`zip` with only its `deflate` feature, tracing, Prometheus. Planned for later items: NATS, provider
-fixtures/WireMock, testcontainers, and media policy.
+`zip` with only its `deflate` feature, tracing, Prometheus, and NATS. Planned for later items:
+provider fixtures/WireMock, testcontainers, and media policy.
+
+`RATATOSKR__BUS__URL` is required. Production supplies an nkey through
+`RATATOSKR__BUS__NKEY_SEED_PATH`; the local unauthenticated NATS test broker may omit it.
 
 ## Code size limits
 

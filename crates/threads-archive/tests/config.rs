@@ -5,15 +5,11 @@ use secrecy::ExposeSecret as _;
 use ratatoskr_threads_archive::{Config, StorageConfig};
 
 #[test]
-fn empty_environment_yields_loopback_default_on_port_9084() {
-    let config = Config::from_environment(Vec::<(String, String)>::new())
-        .expect("an empty environment must be valid");
+fn empty_environment_refuses_to_start_without_the_command_bus() {
+    let error = Config::from_environment(Vec::<(String, String)>::new())
+        .expect_err("Threads must not start without the command bus");
 
-    assert_eq!(config.admin.listen_address.to_string(), "127.0.0.1:9084");
-    assert!(config.storage.database_url.is_none());
-    assert_eq!(config.limits.database_connections, 8);
-    assert_eq!(config.limits.database_acquire_timeout_ms, 5_000);
-    assert_eq!(config.limits.shutdown_timeout_ms, 10_000);
+    assert!(error.to_string().contains("RATATOSKR__BUS__URL"));
 }
 
 #[test]
@@ -37,6 +33,7 @@ fn multiple_violations_reported_together_value_free() {
     let error = Config::from_environment([
         ("RATATOSKR__ADMIN__LISTEN_ADDRESS", "10.0.0.1:9084"),
         ("RATATOSKR__LIMITS__DATABASE_CONNECTIONS", "0"),
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
     ])
     .expect_err("two independent violations must both be refused");
 
@@ -65,6 +62,7 @@ fn recognized_override_changes_exactly_its_own_field() {
             "RATATOSKR__STORAGE__DATABASE_URL",
             "postgres://threads:threads@127.0.0.1:5437/threads",
         ),
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
     ])
     .expect("valid overrides must load");
 
@@ -99,5 +97,33 @@ fn valid_configuration_report_renders_no_secret_material() {
     assert!(
         !rendered.contains("hunter2"),
         "the secret leaked into Debug: {rendered}"
+    );
+}
+
+#[test]
+fn bus_configuration_requires_an_endpoint_and_accepts_an_optional_nkey_path() {
+    let missing_url = Config::from_environment([(
+        "RATATOSKR__BUS__NKEY_SEED_PATH",
+        "/run/ratatoskr/threads.nkey",
+    )])
+    .expect_err("an nkey path without its NATS endpoint is refused");
+    assert!(missing_url.to_string().contains("RATATOSKR__BUS__URL"));
+
+    let config = Config::from_environment([
+        ("RATATOSKR__BUS__URL", "tls://nats.internal:4222"),
+        (
+            "RATATOSKR__BUS__NKEY_SEED_PATH",
+            "/run/ratatoskr/threads.nkey",
+        ),
+    ])
+    .expect("the bounded NATS configuration is accepted");
+    assert_eq!(config.bus.url, "tls://nats.internal:4222");
+    assert_eq!(
+        config
+            .bus
+            .nkey_seed_path
+            .expect("the nkey path is retained")
+            .to_string_lossy(),
+        "/run/ratatoskr/threads.nkey"
     );
 }

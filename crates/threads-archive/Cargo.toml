@@ -9,12 +9,15 @@ repository.workspace = true
 
 [dependencies]
 aes-gcm.workspace = true
+async-nats.workspace = true
 chrono.workspace = true
+futures-util.workspace = true
 getrandom.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
 ratatoskr-event-envelope.workspace = true
 ratatoskr-identifiers.workspace = true
+ratatoskr-operation-contracts.workspace = true
 ratatoskr-social-contracts.workspace = true
 reqwest.workspace = true
 secrecy.workspace = true
