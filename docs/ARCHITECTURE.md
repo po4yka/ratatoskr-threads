@@ -199,6 +199,8 @@ Rules:
 - pagination checkpoints are explicit;
 - partial listings do not prove removal;
 - a provider capability loss is distinct from post deletion.
+- a missing own-content capability is a no-op, not a failed or fabricated sync;
+- an official observation can raise only its matching own post/reply to `authoritative_platform_state` and never proves native Saved membership.
 
 ## 7. Threads post model
 

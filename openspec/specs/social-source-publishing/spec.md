@@ -9,14 +9,16 @@ index and analyse, while keeping provider availability and analysis-result owner
 
 ### Requirement: A preserved Threads source publishes a conformant fact
 
-When a Threads capture has preserved a normalized provider post, the service SHALL append exactly
-one state-carried `social.source.captured.v1` fact for its owner and SHALL append a
+When an explicit Threads capture or an official own-account observation has preserved a normalized
+provider post, the service SHALL append exactly one state-carried `social.source.captured.v1` fact
+for its owner and SHALL append a
 `social.source.updated.v1` fact whenever the published normalized state changes. Each fact SHALL
 carry the published social-contract snapshot with platform `threads`, stable source identity,
 provider identity, canonical permalink, acquisition method, saved authority, capture and
 publication timestamps where known, relations, raw-evidence reference where retained, content
-digest, and upstream availability. The service SHALL not publish a fact for an unavailable-only
-capture.
+digest, and upstream availability. A capture-backed source SHALL retain its explicit capture
+provenance; an official-only source SHALL carry official provenance. The service SHALL not publish
+a fact for an unavailable-only capture.
 
 #### Scenario: A resolved capture creates a self-contained analysis fact
 
@@ -24,6 +26,13 @@ capture.
 - **THEN** its outbox contains one `social.source.captured.v1` envelope whose typed snapshot
   round-trips through the published contract and states the capture's provenance without claiming
   native Saved-list authority
+
+#### Scenario: An official own-account observation creates a self-contained analysis fact
+
+- **WHEN** a capable account synchronization preserves an official own post or reply
+- **THEN** its outbox contains one `social.source.captured.v1` envelope whose typed snapshot
+  carries `official_api` acquisition and `authoritative_platform_state` authority with its local
+  observation timestamp and without a native Saved-list claim
 
 #### Scenario: An unavailable-only capture stays local
 

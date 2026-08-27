@@ -6,13 +6,13 @@ Threads' API surface is limited and evolving, and the monolith captured Threads 
 
 ## The matrix
 
-Explicit capture is implemented (plan item 3): intake canonicalizes permalinks, stores captures idempotently with pinned `explicit_user_capture` provenance, and records evidence-class unavailable fallbacks, so its row reports `Supported`. Every other lane reports `Planned`, and the matrix stays a commitment device — an implementation item must flip its own row's status with a reviewed test change before any code path can claim it.
+Explicit capture, public resolution, and own-account synchronization are implemented. Own-account synchronization runs only when current official capability evaluation allows it, records an opaque completed-page checkpoint, and never treats limited provider pages as account-history or native-Saved completeness. Remaining planned lanes stay unavailable until their implementation item flips them with a reviewed test change.
 
 | Mode | Status | Wire acquisition methods | Authority ceiling |
 |---|---|---|---|
 | `ExplicitCapture` | Supported | `share_extension`, `browser_extension`, `telegram_capture` | `explicit_user_capture` |
-| `PublicResolution` | Planned | `public_resolution` | `explicit_user_capture` |
-| `OwnAccountSync` | Planned | `official_api` | `authoritative_platform_state` |
+| `PublicResolution` | Supported | `public_resolution` | `explicit_user_capture` |
+| `OwnAccountSync` | Supported | `official_api` | `authoritative_platform_state` |
 | `DataExport` | Planned | `data_export` | `export_observation` |
 | `LegacyImport` | Planned | `legacy_import` | `legacy_observation` |
 

@@ -3,7 +3,7 @@
 > Status: Active development
 > Last reviewed: 2026-08-25
 
-Implementation plan items 1 through 6 are implemented. Item 6 provides account-bound encrypted official credential storage, definitive-revoke scrubbing, matrix-reconciled scope discovery, and non-secret official API budget observations. Own-post synchronization and Data Export import (items 7 through 9) remain planned.
+Implementation plan items 1 through 7 are implemented. Item 7 provides capability-aware own-content scheduling, opaque checkpointed scans, raw-first official observations, atomic authoritative projection swaps, reply relations, and no-op results when own-content access is unavailable. Data Export import and media policy (items 8 and 9) remain planned.
 
 ## Intended toolchain
 

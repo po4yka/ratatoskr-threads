@@ -84,9 +84,7 @@ fn capability_discovery_reconciles_scopes_against_the_matrix() {
     );
     assert_eq!(
         capabilities.get(&OfficialCapability::OwnAccountSync),
-        Some(&CapabilityAvailability::Unavailable(
-            "own_account_sync is planned".to_owned()
-        ))
+        Some(&CapabilityAvailability::Available)
     );
     assert_eq!(
         capabilities.get(&OfficialCapability::NativeSavedList),

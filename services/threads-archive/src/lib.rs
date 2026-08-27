@@ -24,6 +24,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use serde::Serialize;
 
+/// Periodic own-account synchronization scheduling primitives.
+pub mod scheduler;
+
 /// No database is configured for this process.
 const DATABASE_ABSENT: u8 = 0;
 /// The last probe answered.

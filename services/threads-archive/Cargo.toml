@@ -30,6 +30,7 @@ metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
 ratatoskr-threads-archive = { path = "../../crates/threads-archive", features = ["test-support"] }
 tower.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

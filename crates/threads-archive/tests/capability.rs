@@ -112,12 +112,14 @@ fn only_implemented_lanes_claim_support() {
         let status = mode.capability().status;
         if matches!(
             mode,
-            AcquisitionMode::ExplicitCapture | AcquisitionMode::PublicResolution
+            AcquisitionMode::ExplicitCapture
+                | AcquisitionMode::PublicResolution
+                | AcquisitionMode::OwnAccountSync
         ) {
             assert_eq!(
                 status,
                 SupportStatus::Supported,
-                "implemented capture and public-resolution lanes must report support"
+                "implemented lanes must report support"
             );
         } else {
             assert_eq!(
@@ -132,8 +134,8 @@ fn only_implemented_lanes_claim_support() {
         .filter(|mode| mode.capability().status == SupportStatus::Supported)
         .count();
     assert_eq!(
-        supported, 2,
-        "exactly explicit capture and public resolution may claim support today"
+        supported, 3,
+        "exactly explicit capture, public resolution, and own-account sync may claim support today"
     );
 }
 

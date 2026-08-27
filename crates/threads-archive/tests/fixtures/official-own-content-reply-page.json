@@ -1,0 +1,12 @@
+{
+  "data": [
+    {
+      "id": "own-reply-001",
+      "permalink": "https://www.threads.net/@fixture/post/own-reply-001",
+      "text": "Synthetic own reply",
+      "timestamp": "2026-08-27T10:01:00Z",
+      "reply_to_id": "parent-post-001"
+    }
+  ],
+  "paging": { "after": "watermark-002" }
+}

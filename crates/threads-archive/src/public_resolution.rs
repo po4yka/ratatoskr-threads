@@ -109,11 +109,11 @@ pub struct RawObjectStore {
 }
 
 #[derive(Debug, Clone)]
-struct StoredRaw {
-    blob_ref: String,
-    content_hash: Vec<u8>,
-    byte_size: i64,
-    media_type: &'static str,
+pub(crate) struct StoredRaw {
+    pub(crate) blob_ref: String,
+    pub(crate) content_hash: Vec<u8>,
+    pub(crate) byte_size: i64,
+    pub(crate) media_type: &'static str,
 }
 
 impl RawObjectStore {
@@ -129,7 +129,7 @@ impl RawObjectStore {
     ///
     /// Returns a typed storage error when the immutable object cannot be
     /// created or an existing digest path has different bytes.
-    async fn store(&self, bytes: &[u8]) -> Result<StoredRaw, PublicResolutionError> {
+    pub(crate) async fn store(&self, bytes: &[u8]) -> Result<StoredRaw, PublicResolutionError> {
         let content_hash = Sha256::digest(bytes).to_vec();
         let digest = hex(&content_hash);
         let path = self.root.join("sha256").join(&digest);

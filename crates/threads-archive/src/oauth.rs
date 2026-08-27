@@ -401,7 +401,7 @@ pub fn reconcile_capabilities(
         ),
         (
             OfficialCapability::OwnAccountSync,
-            availability_for_matrix(AcquisitionMode::OwnAccountSync.capability().status),
+            availability_for_own_account_sync(has_basic),
         ),
         (
             OfficialCapability::NativeSavedList,
@@ -412,6 +412,13 @@ pub fn reconcile_capabilities(
             CapabilityAvailability::Unavailable("publishing requires separate consent".to_owned()),
         ),
     ])
+}
+
+fn availability_for_own_account_sync(has_basic: bool) -> CapabilityAvailability {
+    match AcquisitionMode::OwnAccountSync.capability().status {
+        SupportStatus::Supported => availability_for_scope(has_basic, "threads_basic"),
+        status => availability_for_matrix(status),
+    }
 }
 
 fn availability_for_scope(has_scope: bool, required_scope: &str) -> CapabilityAvailability {

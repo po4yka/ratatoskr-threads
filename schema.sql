@@ -116,6 +116,17 @@ create table threads_archive.account_budgets (
 comment on table threads_archive.account_budgets is
     'Non-secret official API budget observations; budget state never authorizes a product capability.';
 
+create table threads_archive.account_sync_checkpoints (
+    account_id  uuid primary key,
+    watermark   text,
+    updated_at  timestamptz not null default now(),
+    constraint account_sync_checkpoints_account_id_fkey foreign key (account_id)
+        references threads_archive.accounts (account_id)
+);
+
+comment on table threads_archive.account_sync_checkpoints is
+    'The last completed opaque official own-content scan watermark per account; partial scans never update it.';
+
 -- ---------------------------------------------------------------------------------------------
 -- raw_objects
 -- ---------------------------------------------------------------------------------------------
@@ -366,7 +377,7 @@ create table threads_archive.social_sources (
     social_source_id uuid        primary key,
     user_ref         uuid        not null,
     post_id          uuid        not null,
-    first_capture_id uuid        not null,
+    first_capture_id uuid,
     created_at       timestamptz not null default now(),
     constraint social_sources_user_post_key unique (user_ref, post_id),
     constraint social_sources_post_id_fkey foreign key (post_id)
@@ -376,7 +387,7 @@ create table threads_archive.social_sources (
 );
 
 comment on table threads_archive.social_sources is
-    'Tenant-scoped stable identities for normalized Threads posts published as SocialSource facts.';
+    'Tenant-scoped stable identities for normalized Threads posts published as SocialSource facts; first_capture_id is null for official account observations.';
 
 create table threads_archive.social_source_revisions (
     source_revision_id uuid        primary key,

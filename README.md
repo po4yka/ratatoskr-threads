@@ -2,7 +2,7 @@
 
 `ratatoskr-threads` is the Threads account and capture bounded context for Ratatoskr. It combines official user-authorized account capabilities with explicit capture of public posts, official public representations, and versioned Data Export imports.
 
-> **Status:** implementation plan items 1 through 6 are complete. Item 6 stores account-bound encrypted official credentials, scrubs them on definitive revocation, reconciles scope discovery with the capability matrix, and persists bounded non-secret API budget observations. Own-post synchronization and Data Export import remain planned.
+> **Status:** implementation plan items 1 through 7 are complete. Item 7 adds capability-aware scheduled own-post/reply scans with an opaque account checkpoint, raw-first official observations, authoritative projection swaps, and truthful no-ops when own-content access is unavailable. Data Export import remains planned.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -280,8 +280,8 @@ Every operation records acquisition method, authority, resolver/parser version, 
 5. Integrate mobile Share Extensions and browser extension.
 6. Add safe versioned Data Export imports.
 7. Add official OAuth and own-account synchronization.
-8. Integrate linked documents with Extractor and analysis with Knowledge.
-9. Add availability checks, completeness reporting, and provider diagnostics.
+8. Add safe versioned Data Export imports.
+9. Integrate linked documents with Extractor and analysis with Knowledge.
 
 ## Workspace integration
 
@@ -289,4 +289,4 @@ Planned: `ratatoskr-workspace` will pin Threads with compatible social contracts
 
 ## Project status
 
-Implementation plan items 1 through 3 exist: the service binary runs locally against PostgreSQL with health endpoints and an owned `threads_archive` schema, the capability matrix with provenance and relation contracts is defined in code (`crates/threads-archive` `capability` and `relation` modules; see DEVELOPMENT.md for commands), and explicit-capture intake stores captures idempotently — canonicalized permalinks, pinned `explicit_user_capture` provenance, and evidence-class unavailable fallbacks (`capture` and `permalink` modules). No public resolver, OAuth flow, importer, or event publishing exists yet — those are plan items 4 through 9.
+Implementation plan items 1 through 7 exist: the service owns schema/provenance, explicit capture and public resolution, social-source publication, encrypted official OAuth capability discovery, and checkpointed official own-post/reply observations. A scan stores raw provider evidence before normalization, never treats a partial page as deletion evidence, and performs no provider request when the capability is unavailable. Data Export import, media policy, and provider writes remain planned.

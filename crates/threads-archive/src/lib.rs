@@ -11,6 +11,7 @@
 
 /// Provenance semantics: the capability matrix, acquisition modes and their
 /// authority ceilings, and the upstream-versus-preservation boundary.
+pub mod account_sync;
 pub mod capability;
 /// Explicit capture intake: validated requests, stored capture records, and
 /// truthful unavailability observations.

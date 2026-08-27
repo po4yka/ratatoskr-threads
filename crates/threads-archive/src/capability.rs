@@ -55,8 +55,10 @@ impl AcquisitionMode {
             // and relation normalization landed with item 4; event publication is item 5, OAuth
             // discovery item 6, own-post sync item 7, Data Export import item 8.
             // Legacy migration has no dedicated item yet and stays `Planned`.
-            Self::ExplicitCapture | Self::PublicResolution => SupportStatus::Supported,
-            Self::OwnAccountSync | Self::DataExport | Self::LegacyImport => SupportStatus::Planned,
+            Self::ExplicitCapture | Self::PublicResolution | Self::OwnAccountSync => {
+                SupportStatus::Supported
+            }
+            Self::DataExport | Self::LegacyImport => SupportStatus::Planned,
         };
         ModeCapability {
             mode: self,
@@ -164,6 +166,19 @@ pub const NATIVE_SAVED_LIST_SYNC: NativeSavedSupport = NativeSavedSupport {
     status: SupportStatus::NotSupported,
     reason: "no supported provider surface exposes the personal Saved list",
 };
+
+#[cfg(test)]
+mod tests {
+    use super::{AcquisitionMode, SupportStatus};
+
+    #[test]
+    fn own_account_sync_is_supported_after_item_seven() {
+        assert_eq!(
+            AcquisitionMode::OwnAccountSync.capability().status,
+            SupportStatus::Supported
+        );
+    }
+}
 
 /// What Threads last reported about a source's existence or accessibility.
 ///
