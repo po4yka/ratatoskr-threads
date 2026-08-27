@@ -7,9 +7,9 @@ use ratatoskr_identifiers::{
     MediaType, SocialSourceId, TenantRef, WireTimestamp,
 };
 use ratatoskr_social_contracts::{
-    AcquisitionMethod, CaptureCompleteness, Platform, PostPermalink, PostText, SavedAuthority,
-    SocialRelation, SocialRelationKind, SocialSourceCaptured, SocialSourceSnapshot,
-    SocialSourceUpdated, UpstreamAvailability,
+    AcquisitionMethod, CaptureCompleteness, Platform, PostPermalink, PostText, RemovalReason,
+    SavedAuthority, SocialRelation, SocialRelationKind, SocialSourceCaptured, SocialSourceRemoved,
+    SocialSourceSnapshot, SocialSourceUpdated, UpstreamAvailability,
 };
 use sha2::{Digest as _, Sha256};
 use sqlx::PgConnection;
@@ -119,6 +119,61 @@ pub(crate) async fn append_export_fact(
         },
     )
     .await
+}
+
+/// Appends one content-free local-library removal fact inside the caller's transaction.
+pub(crate) async fn append_removal(
+    connection: &mut PgConnection,
+    owner: Uuid,
+    social_source_id: Uuid,
+    operation_id: Uuid,
+    aggregate_type: &'static str,
+    aggregate_id: Uuid,
+) -> Result<(), PublishError> {
+    let payload = SocialSourceRemoved {
+        social_source_id: SocialSourceId::parse(&social_source_id.to_string())
+            .map_err(|error| violation(operation_id, error))?,
+        owner: TenantRef::parse(&format!("user:{owner}"))
+            .map_err(|error| violation(operation_id, error))?,
+        reason: RemovalReason::UserRequested,
+        removed_at: WireTimestamp::now(),
+        extensions: Extensions::default(),
+    };
+    let event_id = Uuid::now_v7();
+    let template = serde_json::json!({
+        "event_id": event_id.to_string(),
+        "event_type": SocialSourceRemoved::EVENT_TYPE,
+        "occurred_at": WireTimestamp::now().to_wire(),
+        "producer": PRODUCER,
+        "aggregate_id": format!("social_source:{social_source_id}"),
+        "correlation_id": format!("deletion:{operation_id}"),
+        "tenant_id": format!("user:{owner}"),
+        "schema_version": 1,
+        "payload": {}
+    });
+    let mut envelope = EventEnvelope::from_json(serde_json::to_vec(&template)?.as_slice())
+        .map_err(|error| violation(operation_id, error))?;
+    envelope
+        .set_payload(&payload)
+        .map_err(|error| violation(operation_id, error))?;
+    let rendered = envelope
+        .to_canonical_json()
+        .map_err(|error| violation(operation_id, error))?;
+    let envelope: serde_json::Value = serde_json::from_str(&rendered)?;
+    sqlx::query(
+        "insert into threads_archive.outbox_events \
+         (event_id, event_type, aggregate_type, aggregate_id, payload, correlation_id, \
+          causation_id, occurred_at) values ($1, $2, $3, $4, $5, $6, null, now())",
+    )
+    .bind(event_id)
+    .bind(SocialSourceRemoved::EVENT_TYPE)
+    .bind(aggregate_type)
+    .bind(aggregate_id)
+    .bind(envelope)
+    .bind(operation_id)
+    .execute(connection)
+    .await?;
+    Ok(())
 }
 
 async fn append_origin_fact(

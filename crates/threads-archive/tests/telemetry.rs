@@ -49,3 +49,51 @@ fn emitted_records_parse_as_json_with_identity_fields() {
         "records carry the build's git SHA"
     );
 }
+
+#[test]
+fn lifecycle_metrics_cover_bounded_outcomes_without_sensitive_labels() {
+    let descriptors = telemetry::lifecycle_metric_descriptors();
+    let names = descriptors
+        .iter()
+        .map(|descriptor| descriptor.name)
+        .collect::<std::collections::BTreeSet<_>>();
+    let required = [
+        "threads_blob_deletion_attempts_total",
+        "threads_deletion_operations_total",
+        "threads_export_reprocessing_duration_seconds",
+        "threads_export_reprocessing_total",
+        "threads_media_admission_total",
+        "threads_reresolution_attempts_total",
+        "threads_reresolution_duration_seconds",
+    ];
+    let missing = required
+        .into_iter()
+        .filter(|name| !names.contains(name))
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "lifecycle metrics are missing: {missing:?}"
+    );
+    let prohibited = [
+        "username",
+        "url",
+        "post_text",
+        "note",
+        "credential",
+        "raw_error",
+        "capture_id",
+        "source_id",
+        "operation_id",
+    ];
+    for descriptor in descriptors {
+        assert!(
+            descriptor
+                .labels
+                .iter()
+                .all(|label| !prohibited.contains(label)),
+            "{} exposes a prohibited label in {:?}",
+            descriptor.name,
+            descriptor.labels
+        );
+    }
+}

@@ -274,6 +274,9 @@ create table threads_archive.media (
     content_hash      bytea,
     byte_size         bigint,
     media_state       text        not null,
+    retention_class   text        not null default 'metadata_only',
+    retention_deadline timestamptz,
+    retention_reason  text,
     observed_at       timestamptz not null,
     constraint media_post_ordinal_key unique (post_id, ordinal),
     constraint media_post_id_fkey foreign key (post_id)
@@ -281,7 +284,19 @@ create table threads_archive.media (
     constraint media_media_kind_check
         check (media_kind in ('image', 'video', 'carousel')),
     constraint media_media_state_check
-        check (media_state in ('metadata_only', 'bytes_archived'))
+        check (media_state in ('metadata_only', 'bytes_archived')),
+    constraint media_retention_class_check
+        check (retention_class in ('metadata_only', 'explicit_archive', 'policy_archive')),
+    constraint media_retention_reason_check
+        check (retention_reason is null or length(retention_reason) between 1 and 64),
+    constraint media_archived_evidence_check check (
+        (media_state = 'metadata_only' and blob_ref is null and content_hash is null
+            and byte_size is null and retention_class = 'metadata_only')
+        or
+        (media_state = 'bytes_archived' and blob_ref is not null and content_hash is not null
+            and byte_size is not null and byte_size >= 0
+            and retention_class in ('explicit_archive', 'policy_archive'))
+    )
 );
 
 comment on table threads_archive.media is
@@ -308,6 +323,7 @@ create table threads_archive.captures (
     status             text        not null,
     note               text,
     captured_at        timestamptz not null,
+    next_resolution_at timestamptz,
     created_at         timestamptz not null default now(),
     constraint captures_post_id_fkey foreign key (post_id)
         references threads_archive.posts (post_id),
@@ -545,8 +561,205 @@ create table threads_archive.inbox_events (
     handler_outcome text       not null,
     constraint inbox_events_consumer_name_event_id_pkey primary key (consumer_name, event_id),
     constraint inbox_events_handler_outcome_check
-        check (handler_outcome in ('processed', 'rejected', 'skipped'))
+        check (handler_outcome in ('processed', 'rejected', 'skipped', 'locally_removed'))
 );
 
 comment on table threads_archive.inbox_events is
     'Consumer inbox deduplication under at-least-once delivery.';
+
+-- ---------------------------------------------------------------------------------------------
+-- item-9 lifecycle operations
+-- ---------------------------------------------------------------------------------------------
+--
+-- These are first-version definitions, not a migration ledger. Deletion audit is deliberately
+-- structural: it contains identifiers, closed classes and counts, never content-bearing JSON.
+
+create table threads_archive.deletion_operations (
+    operation_id uuid        primary key,
+    user_ref     uuid        not null,
+    target_kind  text        not null,
+    target_id    uuid        not null,
+    reason       text        not null,
+    state        text        not null,
+    requested_at timestamptz not null,
+    updated_at   timestamptz not null default now(),
+    finished_at  timestamptz,
+    constraint deletion_operations_target_check
+        check (target_kind in ('capture', 'connection')),
+    constraint deletion_operations_reason_check
+        check (reason in ('user_requested', 'retention_policy')),
+    constraint deletion_operations_state_check
+        check (state in ('planned', 'database_committed', 'pending_blob_deletion', 'complete', 'failed')),
+    constraint deletion_operations_owner_operation_key unique (user_ref, operation_id)
+);
+
+comment on table threads_archive.deletion_operations is
+    'Content-free owner deletion audit and idempotency identity; target rows may be physically gone.';
+
+create table threads_archive.deletion_effects (
+    operation_id   uuid   not null,
+    data_class     text   not null,
+    action         text   not null,
+    affected_count bigint not null,
+    primary key (operation_id, data_class, action),
+    constraint deletion_effects_operation_id_fkey foreign key (operation_id)
+        references threads_archive.deletion_operations (operation_id),
+    constraint deletion_effects_data_class_check
+        check (data_class ~ '^[a-z][a-z0-9_]{0,63}$'),
+    constraint deletion_effects_action_check
+        check (action in ('delete', 'detach', 'retain_audit', 'retain_shared', 'not_applicable')),
+    constraint deletion_effects_count_check check (affected_count >= 0)
+);
+
+comment on table threads_archive.deletion_effects is
+    'Bounded per-class row/blob counts for one deletion; no payload, URL, note, token, or body.';
+
+create table threads_archive.local_source_removals (
+    user_ref         uuid        not null,
+    social_source_id uuid        not null,
+    post_id          uuid        not null,
+    operation_id     uuid        not null,
+    reason           text        not null,
+    removed_at       timestamptz not null,
+    primary key (user_ref, social_source_id),
+    constraint local_source_removals_operation_id_fkey foreign key (operation_id)
+        references threads_archive.deletion_operations (operation_id),
+    constraint local_source_removals_reason_check
+        check (reason in ('user_requested', 'retention_policy'))
+);
+
+comment on table threads_archive.local_source_removals is
+    'Content-free local-library removal guard; distinct from provider availability tombstones.';
+
+create table threads_archive.blob_deletion_tasks (
+    task_id            uuid        primary key,
+    operation_id       uuid,
+    blob_ref           text        not null,
+    content_hash       bytea       not null,
+    state              text        not null,
+    attempt_count      integer     not null default 0,
+    last_failure_class text,
+    created_at         timestamptz not null default now(),
+    updated_at         timestamptz not null default now(),
+    completed_at       timestamptz,
+    constraint blob_deletion_tasks_operation_id_fkey foreign key (operation_id)
+        references threads_archive.deletion_operations (operation_id),
+    constraint blob_deletion_tasks_blob_key unique (blob_ref, content_hash),
+    constraint blob_deletion_tasks_state_check
+        check (state in ('pending', 'complete')),
+    constraint blob_deletion_tasks_attempt_count_check check (attempt_count >= 0),
+    constraint blob_deletion_tasks_failure_class_check
+        check (last_failure_class is null or last_failure_class in
+            ('storage_unavailable', 'digest_mismatch', 'still_referenced'))
+);
+
+comment on table threads_archive.blob_deletion_tasks is
+    'Durable idempotent deletion of an unreferenced service-owned content-addressed object.';
+
+create table threads_archive.reresolution_runs (
+    run_id               uuid        primary key,
+    user_ref             uuid        not null,
+    state                text        not null,
+    max_items            integer     not null,
+    max_requests         integer     not null,
+    max_response_bytes   bigint      not null,
+    max_concurrency      integer     not null,
+    deadline_at          timestamptz not null,
+    items_admitted       integer     not null default 0,
+    requests_reserved    integer     not null default 0,
+    response_bytes       bigint      not null default 0,
+    started_at           timestamptz not null default now(),
+    finished_at          timestamptz,
+    constraint reresolution_runs_state_check
+        check (state in ('running', 'completed', 'completed_with_failures', 'failed')),
+    constraint reresolution_runs_positive_limits_check check (
+        max_items > 0 and max_requests > 0 and max_response_bytes > 0 and max_concurrency > 0
+    ),
+    constraint reresolution_runs_counters_check check (
+        items_admitted >= 0 and items_admitted <= max_items
+        and requests_reserved >= 0 and requests_reserved <= max_requests
+        and response_bytes >= 0 and response_bytes <= max_response_bytes
+    )
+);
+
+comment on table threads_archive.reresolution_runs is
+    'Finite owner-scoped public re-resolution budget and bounded aggregate outcome.';
+
+create table threads_archive.reresolution_items (
+    run_id          uuid        not null,
+    capture_id      uuid        not null,
+    state           text        not null,
+    skip_reason     text,
+    attempt_count   integer     not null default 0,
+    response_bytes  bigint      not null default 0,
+    claimed_at      timestamptz,
+    finished_at     timestamptz,
+    primary key (run_id, capture_id),
+    constraint reresolution_items_run_id_fkey foreign key (run_id)
+        references threads_archive.reresolution_runs (run_id),
+    constraint reresolution_items_state_check
+        check (state in ('candidate', 'claimed', 'updated', 'unchanged', 'skipped', 'failed')),
+    constraint reresolution_items_skip_reason_check
+        check (skip_reason is null or skip_reason in
+            ('not_due', 'not_live', 'privacy_terminal', 'unsupported', 'item_budget',
+             'request_budget', 'byte_budget', 'deadline', 'concurrency', 'provider_budget')),
+    constraint reresolution_items_counters_check
+        check (attempt_count >= 0 and response_bytes >= 0)
+);
+
+comment on table threads_archive.reresolution_items is
+    'Deterministic candidate and outcome evidence; capture_id remains after local deletion for audit.';
+
+create table threads_archive.export_reprocessing_runs (
+    reprocessing_run_id uuid        primary key,
+    operation_id       uuid        not null,
+    export_run_id      uuid        not null,
+    user_ref           uuid        not null,
+    detected_version   text        not null,
+    parser_version     text        not null,
+    state              text        not null,
+    plan_fingerprint   text        not null,
+    state_fingerprint  text        not null,
+    checkpoint_item_key text,
+    report             jsonb,
+    started_at         timestamptz not null default now(),
+    updated_at         timestamptz not null default now(),
+    finished_at        timestamptz,
+    constraint export_reprocessing_runs_export_run_id_fkey foreign key (export_run_id)
+        references threads_archive.export_runs (run_id),
+    constraint export_reprocessing_runs_owner_operation_key unique (user_ref, operation_id),
+    constraint export_reprocessing_runs_state_check
+        check (state in ('running', 'completed', 'completed_with_warnings', 'failed')),
+    constraint export_reprocessing_runs_version_check
+        check (length(detected_version) between 1 and 128 and length(parser_version) between 1 and 128),
+    constraint export_reprocessing_runs_fingerprint_check
+        check (length(plan_fingerprint) = 64 and length(state_fingerprint) = 64)
+);
+
+comment on table threads_archive.export_reprocessing_runs is
+    'Separate parser-version operation over one immutable original export receipt; never a schema migration.';
+
+create table threads_archive.export_reprocessing_items (
+    reprocessing_run_id uuid   not null,
+    item_key            text   not null,
+    classification      text   not null,
+    state               text   not null,
+    prospective_digest  text,
+    applied_digest      text,
+    primary key (reprocessing_run_id, item_key),
+    constraint export_reprocessing_items_run_id_fkey foreign key (reprocessing_run_id)
+        references threads_archive.export_reprocessing_runs (reprocessing_run_id),
+    constraint export_reprocessing_items_item_key_check check (length(item_key) between 1 and 512),
+    constraint export_reprocessing_items_classification_check
+        check (classification in
+            ('normalized', 'unknown_record', 'unknown_section', 'conflict', 'warning', 'omitted')),
+    constraint export_reprocessing_items_state_check
+        check (state in ('planned', 'applied', 'skipped', 'conflict', 'warning')),
+    constraint export_reprocessing_items_digest_check check (
+        (prospective_digest is null or length(prospective_digest) = 64)
+        and (applied_digest is null or length(applied_digest) = 64)
+    )
+);
+
+comment on table threads_archive.export_reprocessing_items is
+    'Content-free deterministic checkpoint and digest outcome for one retained-export item.';

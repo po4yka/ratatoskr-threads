@@ -2,7 +2,7 @@
 
 `ratatoskr-threads` is the Threads account and capture bounded context for Ratatoskr. It combines official user-authorized account capabilities with explicit capture of public posts, official public representations, and versioned Data Export imports.
 
-> **Status:** implementation plan items 1 through 8 are complete. Item 8 adds owner-scoped immutable Data Export receipts, bounded hostile-ZIP refusal, parser-versioned projection, raw retention for unknown sections, replay-safe source publication, and a completeness report that never turns export absence into deletion.
+> **Status:** implementation plan items 1 through 9 are complete. Item 9 adds explicit media byte-retention decisions, complete owner-deletion enumeration and downstream removal facts, finite public re-resolution guards, and parser-version reprocessing with read-only dry-run fidelity.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -107,6 +107,14 @@ inbox_events
 social_sources
 social_source_revisions
 social_analysis_links
+deletion_operations
+deletion_effects
+local_source_removals
+blob_deletion_tasks
+reresolution_runs
+reresolution_items
+export_reprocessing_runs
+export_reprocessing_items
 ```
 
 Rows are written by implemented and later capabilities; public-resolution rows retain immutable raw
@@ -117,6 +125,25 @@ telegram_capture | public_resolution | data_export | legacy_import`) and saved a
 are closed CHECK constraints aligned with the published social-contract grammar, so a capture
 cannot be stored as native Saved-list state. Large export archives, media, raw API/oEmbed
 responses, and unknown provider records are stored in the content-addressed BlobStore.
+
+## Lifecycle operations
+
+Provider-media bytes remain metadata-only unless acquisition, rights, MIME/kind, URL lifetime,
+object size, owner storage, and explicit-action guards all admit an immutable fetch lease. Expiry
+or owner deletion schedules digest-verified BlobStore cleanup only after a database-wide reference
+check; failure stays durable and retryable.
+
+Capture and connection deletion are owner-bound, replay-safe operations. Preview and apply share a
+complete table/blob classification and content-free counts. The final local holding publishes one
+`social.source.removed.v1`; Knowledge owns deletion of derived analysis and late completion cannot
+resurrect the local source.
+
+`reprocess-export dry-run|apply` reinterprets a retained export under an explicitly registered
+parser version. Dry-run is read-only and produces the same ordered report and fingerprints as
+apply. This is operational parser reprocessing, not database migration tooling; development
+databases still initialize only from the current `schema.sql`. Normal tests use synthetic/redacted
+exports, so compatibility with a real protected export remains unverified until an authorized
+fixture is exercised outside CI.
 
 ## Capture flow
 

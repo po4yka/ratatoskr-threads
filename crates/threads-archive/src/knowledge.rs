@@ -14,6 +14,8 @@ pub enum CompletionLinkOutcome {
     Duplicate,
     /// The completion did not name a Threads revision owned by this tenant.
     Rejected,
+    /// The source was removed locally, so late completion cannot recreate linkage.
+    LocallyRemoved,
 }
 
 /// Accepts privacy-safe completion facts from Knowledge.
@@ -71,24 +73,31 @@ impl<'a> KnowledgeCompletionStore<'a> {
 
         let owner = completion.owner.user_id().0;
         let source_id = completion.social_source_id.to_string();
+        let source_uuid = source_id
+            .parse::<Uuid>()
+            .map_err(|error| PersistenceError::Query(sqlx::Error::Protocol(error.to_string())))?;
         let digest = completion.content_digest.hex.to_string();
-        let matches: Option<Uuid> =
-            sqlx::query_scalar(
-                "select revision.source_revision_id \
+        if reject_locally_removed(&mut transaction, event_id, owner, source_uuid).await? {
+            transaction
+                .commit()
+                .await
+                .map_err(PersistenceError::Query)?;
+            return Ok(CompletionLinkOutcome::LocallyRemoved);
+        }
+        let matches: Option<Uuid> = sqlx::query_scalar(
+            "select revision.source_revision_id \
              from threads_archive.social_source_revisions revision \
              join threads_archive.social_sources source \
                on source.social_source_id = revision.social_source_id \
              where revision.social_source_id = $1 and revision.content_digest = $2 \
                and source.user_ref = $3",
-            )
-            .bind(source_id.parse::<Uuid>().map_err(|error| {
-                PersistenceError::Query(sqlx::Error::Protocol(error.to_string()))
-            })?)
-            .bind(&digest)
-            .bind(owner)
-            .fetch_optional(&mut *transaction)
-            .await
-            .map_err(PersistenceError::Query)?;
+        )
+        .bind(source_uuid)
+        .bind(&digest)
+        .bind(owner)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(PersistenceError::Query)?;
         if matches.is_none() {
             sqlx::query(
                 "update threads_archive.inbox_events set handler_outcome = 'rejected' \
@@ -114,11 +123,7 @@ impl<'a> KnowledgeCompletionStore<'a> {
         )
         .bind(event_id)
         .bind(owner)
-        .bind(
-            source_id.parse::<Uuid>().map_err(|error| {
-                PersistenceError::Query(sqlx::Error::Protocol(error.to_string()))
-            })?,
-        )
+        .bind(source_uuid)
         .bind(digest)
         .bind(completed_at)
         .execute(&mut *transaction)
@@ -130,4 +135,32 @@ impl<'a> KnowledgeCompletionStore<'a> {
             .map_err(PersistenceError::Query)?;
         Ok(CompletionLinkOutcome::Linked)
     }
+}
+
+async fn reject_locally_removed(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    event_id: Uuid,
+    owner: Uuid,
+    source_id: Uuid,
+) -> Result<bool, PersistenceError> {
+    let locally_removed: bool = sqlx::query_scalar(
+        "select exists(select 1 from threads_archive.local_source_removals \
+         where user_ref = $1 and social_source_id = $2)",
+    )
+    .bind(owner)
+    .bind(source_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(PersistenceError::Query)?;
+    if locally_removed {
+        sqlx::query(
+            "update threads_archive.inbox_events set handler_outcome = 'locally_removed' \
+             where consumer_name = 'threads-social-source-knowledge' and event_id = $1",
+        )
+        .bind(event_id)
+        .execute(&mut **transaction)
+        .await
+        .map_err(PersistenceError::Query)?;
+    }
+    Ok(locally_removed)
 }

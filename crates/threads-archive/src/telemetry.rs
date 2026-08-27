@@ -6,7 +6,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use metrics::gauge;
+use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::MakeWriter;
@@ -35,6 +35,148 @@ pub const RUST_VERSION: &str = env!("CARGO_PKG_RUST_VERSION");
 
 /// The build-identity gauge: one series, labelled with the compiled identity.
 const BUILD_INFO_METRIC: &str = "threads_build_info";
+
+/// One bounded lifecycle metric and its low-cardinality label keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LifecycleMetricDescriptor {
+    /// Stable Prometheus metric name.
+    pub name: &'static str,
+    /// Closed label keys; values are closed operation/outcome vocabularies.
+    pub labels: &'static [&'static str],
+}
+
+/// Returns the complete lifecycle metric surface.
+#[must_use]
+pub const fn lifecycle_metric_descriptors() -> &'static [LifecycleMetricDescriptor] {
+    &[
+        LifecycleMetricDescriptor {
+            name: "threads_media_admission_total",
+            labels: &["outcome", "reason"],
+        },
+        LifecycleMetricDescriptor {
+            name: "threads_deletion_operations_total",
+            labels: &["target", "outcome"],
+        },
+        LifecycleMetricDescriptor {
+            name: "threads_blob_deletion_attempts_total",
+            labels: &["outcome", "failure_class"],
+        },
+        LifecycleMetricDescriptor {
+            name: "threads_reresolution_attempts_total",
+            labels: &["outcome", "reason"],
+        },
+        LifecycleMetricDescriptor {
+            name: "threads_reresolution_duration_seconds",
+            labels: &["outcome"],
+        },
+        LifecycleMetricDescriptor {
+            name: "threads_export_reprocessing_total",
+            labels: &["mode", "outcome"],
+        },
+        LifecycleMetricDescriptor {
+            name: "threads_export_reprocessing_duration_seconds",
+            labels: &["mode", "outcome"],
+        },
+    ]
+}
+
+/// Closed lifecycle operation vocabulary used as metric label values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleOperation {
+    /// Provider-media policy admission.
+    MediaAdmission,
+    /// Capture-target owner deletion.
+    CaptureDeletion,
+    /// Connection-target owner deletion.
+    ConnectionDeletion,
+    /// Digest-verified `BlobStore` cleanup.
+    BlobDeletion,
+    /// Public capture re-resolution.
+    ReResolution,
+    /// Read-only retained-export reprocessing.
+    ExportDryRun,
+    /// Mutating retained-export reprocessing.
+    ExportApply,
+}
+
+/// Closed lifecycle outcome vocabulary used as metric label values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LifecycleOutcome {
+    /// Work was admitted or started.
+    Admitted,
+    /// Policy kept only metadata.
+    MetadataOnly,
+    /// Work reached its terminal successful state.
+    Complete,
+    /// Durable external cleanup remains pending.
+    Pending,
+    /// A finite/privacy guard skipped work before I/O.
+    Skipped,
+    /// A safe operational failure occurred.
+    Failed,
+}
+
+impl LifecycleOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Admitted => "admitted",
+            Self::MetadataOnly => "metadata_only",
+            Self::Complete => "complete",
+            Self::Pending => "pending",
+            Self::Skipped => "skipped",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// Records one bounded lifecycle outcome without identifiers or content labels.
+pub fn record_lifecycle_outcome(
+    operation: LifecycleOperation,
+    outcome: LifecycleOutcome,
+    duration_seconds: Option<f64>,
+) {
+    let outcome = outcome.as_str();
+    match operation {
+        LifecycleOperation::MediaAdmission => {
+            counter!("threads_media_admission_total", "outcome" => outcome, "reason" => "bounded")
+                .increment(1);
+        }
+        LifecycleOperation::CaptureDeletion | LifecycleOperation::ConnectionDeletion => {
+            let target = if operation == LifecycleOperation::CaptureDeletion {
+                "capture"
+            } else {
+                "connection"
+            };
+            counter!("threads_deletion_operations_total", "target" => target, "outcome" => outcome)
+                .increment(1);
+        }
+        LifecycleOperation::BlobDeletion => {
+            counter!("threads_blob_deletion_attempts_total", "outcome" => outcome, "failure_class" => "bounded")
+                .increment(1);
+        }
+        LifecycleOperation::ReResolution => {
+            counter!("threads_reresolution_attempts_total", "outcome" => outcome, "reason" => "bounded")
+                .increment(1);
+            if let Some(duration) = duration_seconds {
+                histogram!("threads_reresolution_duration_seconds", "outcome" => outcome)
+                    .record(duration);
+            }
+        }
+        LifecycleOperation::ExportDryRun | LifecycleOperation::ExportApply => {
+            let mode = if operation == LifecycleOperation::ExportDryRun {
+                "dry_run"
+            } else {
+                "apply"
+            };
+            counter!("threads_export_reprocessing_total", "mode" => mode, "outcome" => outcome)
+                .increment(1);
+            if let Some(duration) = duration_seconds {
+                histogram!("threads_export_reprocessing_duration_seconds", "mode" => mode, "outcome" => outcome)
+                    .record(duration);
+            }
+        }
+    }
+}
 
 /// Telemetry bootstrap failure.
 #[derive(Debug, thiserror::Error)]

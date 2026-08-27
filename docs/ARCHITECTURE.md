@@ -672,3 +672,21 @@ Initial milestones:
 10. Legacy capture migration.
 
 Changes to acquisition authority, provider-session policy, post-relation semantics, or private-content handling require ADRs and coordinated workspace changesets.
+
+## 27. Item 9 lifecycle architecture
+
+Media admission is a pure fail-closed decision before network I/O. Verified HTTPS/MIME/length/hash
+bytes are promoted atomically; expiry removes a blob only after every `raw_objects`, `media`, and
+`export_runs` reference is absent. SQL commits pending deletion work before filesystem I/O.
+
+Privacy deletion uses a closed inventory of every owned table and BlobStore class. Preview is
+read-only; apply locks and recomputes, removes content/credentials, retains only content-free audit,
+and publishes one local-library removal fact per final source. Knowledge consumes that fact through
+the existing at-least-once boundary; no synchronous cross-schema write was added.
+
+Re-resolution separates selection, transactional claim/reservation, HTTP, and finalize phases so
+no database connection spans provider I/O. Parser reprocessing similarly separates immutable
+receipt verification, pure planning, read-only dry-run, and checkpointed apply. Rollout enables
+workers/apply after schema initialization; rollback disables workers/apply while preserving audit,
+pending blob tasks, raw exports, and outbox facts. No later database version or migration path is
+introduced.

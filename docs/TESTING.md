@@ -36,3 +36,18 @@ Two checks stand behind this, and neither of them can see the order:
 
 `ratatoskr-workspace/docs/QUALITY_GATES.md` records why the order itself is not checkable, rather
 than leaving the gap to be discovered.
+
+## Item 9 suites
+
+- `media_retention`: default metadata-only, full eligibility matrix, verified promotion, shared
+  references, and retryable digest-bound deletion.
+- `privacy_deletion` plus `social_publishing`: exact storage enumeration, owner refusal, preview/apply
+  fidelity, duplicate/final/connection behavior, replay, and late Knowledge completion guard.
+- `re_resolution_jobs`: deterministic due selection, every finite pre-I/O budget, unchanged refresh,
+  and deletion-between-selection-and-claim.
+- `data_export_reprocessing` and service `reprocess_export`: receipt/parser refusal, dry-run/apply
+  fidelity and zero mutation, resume/replay, omission preservation, stdout/stderr/exits/broken pipe.
+
+Fixtures contain no credentials, personal exports, real URLs with private content, or user notes.
+Passing them is local synthetic evidence, not proof against a real protected export. Compiler-backed
+tests and the full workspace gate run through `build-gate` on development Macs.
