@@ -98,11 +98,7 @@ pub struct StoredResolution {
     pub observed_at: DateTime<Utc>,
 }
 
-/// A bounded, service-owned raw evidence directory.
-///
-/// Files are addressed by SHA-256 digest and created once. Database rows may
-/// refer to the same immutable body from multiple observations without
-/// replacing either observation's revision record.
+/// A bounded service-owned SHA-256 raw-evidence directory with immutable reused bodies.
 #[derive(Debug, Clone)]
 pub struct RawObjectStore {
     root: PathBuf,
@@ -123,12 +119,7 @@ impl RawObjectStore {
         Self { root: root.into() }
     }
 
-    /// Stores one raw response before it is normalized.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed storage error when the immutable object cannot be
-    /// created or an existing digest path has different bytes.
+    /// Stores one raw response before normalization, rejecting write or digest conflicts.
     pub(crate) async fn store(&self, bytes: &[u8]) -> Result<StoredRaw, PublicResolutionError> {
         let content_hash = Sha256::digest(bytes).to_vec();
         let digest = hex(&content_hash);
@@ -154,13 +145,7 @@ impl RawObjectStore {
         })
     }
 
-    /// Streams raw bytes into immutable service-owned storage before parsing.
-    ///
-    /// # Errors
-    ///
-    /// Returns a storage error when the stream cannot be read, its declared
-    /// byte budget is exceeded, or the content-addressed object cannot be
-    /// atomically materialized and verified.
+    /// Streams raw bytes before parsing, rejecting read, budget, or immutable-storage failures.
     pub(crate) async fn store_stream<R>(
         &self,
         reader: &mut R,
@@ -415,12 +400,10 @@ pub enum RelationGraphError {
     ReplyCycle,
 }
 
-/// Normalizes fixture relation observations.
+/// Normalizes relations.
 ///
 /// # Errors
-///
-/// Returns [`RelationGraphError::InvalidKind`] for malformed provider kinds or
-/// [`RelationGraphError::ReplyCycle`] for a cyclic resolved reply hierarchy.
+/// Rejects malformed provider kinds and cyclic resolved replies.
 pub fn normalize_relations(
     known_provider_ids: &BTreeSet<String>,
     relations: Vec<RelationInput>,
@@ -517,12 +500,11 @@ impl<'a> PublicResolutionStore<'a> {
         }
     }
 
-    /// Records one already-fetched approved observation against a capture.
+    /// Records one fetched approved observation against a capture.
     ///
     /// # Errors
     ///
-    /// Returns [`PublicResolutionError::Persistence`] when an archive query
-    /// cannot complete.
+    /// Rejects persistence failures.
     pub async fn record(
         &self,
         capture_id: Uuid,
