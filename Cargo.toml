@@ -44,6 +44,9 @@ sqlx = { version = "=0.8.6", default-features = false, features = [
 
 # ---- configuration and secrets ----
 secrecy = "=0.10.3"
+# Fleet OAuth envelope: AES-256-GCM with explicit key generation and fresh nonces.
+aes-gcm = { version = "=0.11.1", default-features = false, features = ["aes", "alloc"] }
+getrandom = "=0.4.3"
 
 # ---- telemetry ----
 tracing                     = "=0.1.44"

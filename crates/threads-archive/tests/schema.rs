@@ -11,11 +11,13 @@ use ratatoskr_threads_archive::Database;
 use ratatoskr_threads_archive::test_support::{TestDatabase, admin_url};
 
 /// The relations AGENTS.md's persistence vocabulary declares, no more, no fewer.
-const DECLARED_TABLES: [&str; 17] = [
+const DECLARED_TABLES: [&str; 19] = [
+    "account_budgets",
     "accounts",
     "captures",
     "capture_resolutions",
     "credentials",
+    "credential_audit",
     "export_records",
     "export_runs",
     "inbox_events",

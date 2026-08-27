@@ -20,6 +20,8 @@ pub mod config;
 pub mod database;
 /// Privacy-safe observational linkage to completed Knowledge analyses.
 pub mod knowledge;
+/// Official Threads OAuth credentials and account capability discovery.
+pub mod oauth;
 pub mod permalink;
 /// Supported public-resolution parsing and persistence.
 pub mod public_resolution;

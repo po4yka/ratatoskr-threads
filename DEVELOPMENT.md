@@ -3,7 +3,7 @@
 > Status: Active development
 > Last reviewed: 2026-08-25
 
-Implementation plan items 1 through 5 are implemented: a Rust/Tokio service with typed strict configuration, structured telemetry, operator health routes, typed errors, and the first-version `threads_archive` schema applied at startup; explicit-capture intake in the library — permalink canonicalization (`crates/threads-archive` `permalink`), idempotent capture records with pinned provenance, and truthful unavailable fallbacks (`capture`); and public resolution (`public_resolution`). The public resolver is Rustls-only and accepts only approved Threads oEmbed HTTPS surfaces, retains content-addressed raw evidence before append-only parser-versioned revisions, and stores reply/quote structure as directed relation rows with explicit unresolved targets and cycle refusal. Item 5 pins the published social contracts and transactionally writes state-carried `social.source.captured.v1`/`social.source.updated.v1` envelopes. Those facts are the asynchronous Knowledge analysis input; completed analyses return only an inbox-deduplicated `(owner, social_source_id, content_digest, completed_at)` linkage. A provider tombstone yields `deleted_upstream` on an update and never a local-library removal. Items 6 through 9 — account OAuth, own-post synchronization, and Data Export import — remain planned.
+Implementation plan items 1 through 6 are implemented. Item 6 provides account-bound encrypted official credential storage, definitive-revoke scrubbing, matrix-reconciled scope discovery, and non-secret official API budget observations. Own-post synchronization and Data Export import (items 7 through 9) remain planned.
 
 ## Intended toolchain
 

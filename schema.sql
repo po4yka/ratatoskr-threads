@@ -82,6 +82,40 @@ create table threads_archive.credentials (
 comment on table threads_archive.credentials is
     'Encrypted OAuth token material for one account. Ciphertext only, versioned for rotation.';
 
+-- Non-secret credential lifecycle evidence. Revocation deletes the matching credential row but
+-- retains this event so operators can explain the account state without retaining token material.
+create table threads_archive.credential_audit (
+    audit_id    uuid        primary key,
+    account_id  uuid        not null,
+    event_kind  text        not null,
+    occurred_at timestamptz not null default now(),
+    constraint credential_audit_account_id_fkey foreign key (account_id)
+        references threads_archive.accounts (account_id),
+    constraint credential_audit_event_kind_check
+        check (event_kind in ('connected', 'refreshed', 'revoked', 'reauthorization_required'))
+);
+
+comment on table threads_archive.credential_audit is
+    'Non-secret official OAuth lifecycle evidence. Never contains token values or ciphertext.';
+
+create table threads_archive.account_budgets (
+    account_id     uuid        not null,
+    endpoint_class text        not null,
+    remaining      integer     not null,
+    resets_at      timestamptz,
+    request_id     text,
+    observed_at    timestamptz not null default now(),
+    primary key (account_id, endpoint_class),
+    constraint account_budgets_account_id_fkey foreign key (account_id)
+        references threads_archive.accounts (account_id),
+    constraint account_budgets_endpoint_class_check check (length(endpoint_class) between 1 and 64),
+    constraint account_budgets_remaining_check check (remaining >= 0),
+    constraint account_budgets_request_id_check check (request_id is null or length(request_id) <= 256)
+);
+
+comment on table threads_archive.account_budgets is
+    'Non-secret official API budget observations; budget state never authorizes a product capability.';
+
 -- ---------------------------------------------------------------------------------------------
 -- raw_objects
 -- ---------------------------------------------------------------------------------------------
