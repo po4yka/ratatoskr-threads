@@ -1,4 +1,16 @@
 services:
+  nats:
+    image: nats:2-alpine
+    container_name: ratatoskr-threads-nats
+    command: ["-js"]
+    ports:
+      - "127.0.0.1:5422:4222"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8222/healthz"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
   postgres:
     # Pinned by digest, not by tag, matching ci.yml. The digest is `postgres:17` as it stood on
     # 2026-08-19: PostgreSQL 17.11, the multi-architecture index.

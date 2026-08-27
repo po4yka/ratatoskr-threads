@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use secrecy::ExposeSecret as _;
 
+use ratatoskr_threads_archive::nats::{self, NatsConnection};
 use ratatoskr_threads_archive::telemetry::SERVICE_NAME;
 use ratatoskr_threads_archive::{Config, Database};
 use ratatoskr_threads_archive_service::RuntimeState;
@@ -104,6 +105,8 @@ async fn tokio_main() -> Result<(), ExitCode> {
         ExitCode::FAILURE
     })?;
 
+    let nats_worker = spawn_nats_consumer(&config.bus, database.clone()).await?;
+
     let runtime = Arc::new(RuntimeState::new());
     let listener = tokio::net::TcpListener::bind(config.admin.listen_address)
         .await
@@ -133,6 +136,7 @@ async fn tokio_main() -> Result<(), ExitCode> {
     .await;
 
     prober.abort();
+    stop_nats_consumer(nats_worker).await;
 
     match serve_result {
         Ok(()) => {
@@ -143,6 +147,59 @@ async fn tokio_main() -> Result<(), ExitCode> {
             tracing::error!(%error, "the operator server failed");
             Err(ExitCode::FAILURE)
         }
+    }
+}
+
+async fn spawn_nats_consumer(
+    bus: &ratatoskr_threads_archive::BusConfig,
+    database: Database,
+) -> Result<
+    (
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ),
+    ExitCode,
+> {
+    let connection = match bus.nkey_seed_path.as_deref() {
+        Some(seed_path) => NatsConnection::connect_with_nkey(&bus.url, seed_path).await,
+        None => NatsConnection::connect(&bus.url).await,
+    }
+    .map_err(|error| {
+        tracing::error!(%error, "the NATS command consumer could not connect");
+        ExitCode::FAILURE
+    })?;
+    nats::ensure_command_consumer(&connection)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "the NATS command consumer is not deployable");
+            ExitCode::FAILURE
+        })?;
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let worker = tokio::spawn(async move {
+        if let Err(error) = nats::run(&connection, &database, async move {
+            let _ignored = stop_rx.await;
+        })
+        .await
+        {
+            tracing::error!(%error, "the NATS command consumer stopped");
+        }
+    });
+    Ok((stop_tx, worker))
+}
+
+async fn stop_nats_consumer(
+    worker: (
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<()>,
+    ),
+) {
+    let (stop, task) = worker;
+    let _ignored = stop.send(());
+    if tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .is_err()
+    {
+        tracing::warn!("the NATS command consumer did not stop within five seconds");
     }
 }
 

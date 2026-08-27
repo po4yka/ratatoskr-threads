@@ -12,6 +12,10 @@
 /// Provenance semantics: the capability matrix, acquisition modes and their
 /// authority ceilings, and the upstream-versus-preservation boundary.
 pub mod account_sync;
+/// Contract validation and durable intake for Platform-routed browser captures.
+pub mod browser_capture_command;
+/// Transactional inbox intake for Platform-routed browser captures.
+pub mod browser_capture_inbox;
 pub mod capability;
 /// Explicit capture intake: validated requests, stored capture records, and
 /// truthful unavailability observations.
@@ -21,6 +25,8 @@ pub mod config;
 pub mod database;
 /// Privacy-safe observational linkage to completed Knowledge analyses.
 pub mod knowledge;
+/// Provider-specific JetStream command consumption and transactional-outbox publication.
+pub mod nats;
 /// Official Threads OAuth credentials and account capability discovery.
 pub mod oauth;
 pub mod permalink;
@@ -33,7 +39,9 @@ pub mod relation;
 /// Structured logs and the Prometheus registry.
 pub mod telemetry;
 
-pub use config::{AdminConfig, Config, ConfigError, Limits, StorageConfig, TelemetryConfig};
+pub use config::{
+    AdminConfig, BusConfig, Config, ConfigError, Limits, StorageConfig, TelemetryConfig,
+};
 pub use database::{Database, PersistenceError};
 pub use telemetry::{TelemetryError, TelemetryGuard, init_telemetry};
 

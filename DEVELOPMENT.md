@@ -7,7 +7,12 @@ Implementation plan items 1 through 7 are implemented. Item 7 provides capabilit
 
 ## Intended toolchain
 
-Rust/Tokio (pinned by `rust-toolchain.toml` at 1.97.0), SQLx/PostgreSQL, axum, Reqwest/Rustls, tracing, Prometheus. Planned for later items: OAuth, safe archive import, NATS, provider fixtures/WireMock, testcontainers.
+Rust/Tokio (pinned by `rust-toolchain.toml` at 1.97.0), SQLx/PostgreSQL, axum, Reqwest/Rustls,
+tracing, Prometheus, and NATS. Planned for later items: OAuth, safe archive import, provider
+fixtures/WireMock, and testcontainers.
+
+`RATATOSKR__BUS__URL` is required. Production supplies an nkey through
+`RATATOSKR__BUS__NKEY_SEED_PATH`; the local unauthenticated NATS test broker may omit it.
 
 ## Code size limits
 

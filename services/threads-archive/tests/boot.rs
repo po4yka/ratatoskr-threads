@@ -12,6 +12,7 @@ use ratatoskr_threads_archive::test_support::TestDatabase;
 const BIN: &str = env!("CARGO_BIN_EXE_ratatoskr-threads-archive");
 const READY_TIMEOUT: Duration = Duration::from_mins(1);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
+const NATS_URL: &str = "nats://127.0.0.1:5422";
 
 /// Reserves a free loopback port for the operator listener.
 #[expect(
@@ -39,17 +40,49 @@ fn http_get(port: u16, path: &str) -> Option<(u16, String)> {
 }
 
 #[expect(clippy::expect_used, reason = "boot-test helper; see free_port")]
-fn spawn_service(database_url: &str, admin_port: u16) -> Child {
+async fn spawn_service(database_url: &str, admin_port: u16) -> Child {
+    ensure_command_stream().await;
     Command::new(BIN)
         .env("RATATOSKR__STORAGE__DATABASE_URL", database_url)
         .env(
             "RATATOSKR__ADMIN__LISTEN_ADDRESS",
             format!("127.0.0.1:{admin_port}"),
         )
+        .env("RATATOSKR__BUS__URL", NATS_URL)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("the service binary spawns")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "test fixture: its broker/stream setup is required before service startup"
+)]
+async fn ensure_command_stream() {
+    let client = async_nats::connect(NATS_URL)
+        .await
+        .expect("the local NATS test broker is reachable");
+    let context = async_nats::jetstream::new(client);
+    let stream = context
+        .get_or_create_stream(async_nats::jetstream::stream::Config {
+            name: "ratatoskr_commands".to_owned(),
+            subjects: vec!["cmd.>".to_owned()],
+            ..async_nats::jetstream::stream::Config::default()
+        })
+        .await
+        .expect("the command stream exists");
+    let _consumer = stream
+        .get_or_create_consumer(
+            "threads_browser_capture",
+            async_nats::jetstream::consumer::pull::Config {
+                durable_name: Some("threads_browser_capture".to_owned()),
+                filter_subject: "cmd.threads.capture.requested.v1".to_owned(),
+                ..async_nats::jetstream::consumer::pull::Config::default()
+            },
+        )
+        .await
+        .expect("the Threads command consumer exists");
 }
 
 #[cfg(unix)]
@@ -87,7 +120,7 @@ async fn ready_reaches_200_after_startup() {
     let url = test_url(test.name());
     let port = free_port();
 
-    let mut child = spawn_service(&url, port);
+    let mut child = spawn_service(&url, port).await;
 
     // Readiness arrives only after connect + schema apply + bind.
     let deadline = Instant::now() + READY_TIMEOUT;
@@ -119,7 +152,7 @@ async fn live_metrics_version_answer_200_and_unknown_path_404_while_serving() {
     let url = test_url(test.name());
     let port = free_port();
 
-    let mut child = spawn_service(&url, port);
+    let mut child = spawn_service(&url, port).await;
 
     // Wait for readiness before probing the rest of the plane.
     let deadline = Instant::now() + READY_TIMEOUT;
@@ -159,7 +192,7 @@ async fn sigterm_exits_0_within_shutdown_bound() {
     let url = test_url(test.name());
     let port = free_port();
 
-    let mut child = spawn_service(&url, port);
+    let mut child = spawn_service(&url, port).await;
 
     let deadline = Instant::now() + READY_TIMEOUT;
     while Instant::now() < deadline {
@@ -186,6 +219,7 @@ async fn check_config_exits_0_binding_no_port() {
     let output = Command::new(BIN)
         .arg("check-config")
         .env("RATATOSKR__STORAGE__DATABASE_URL", test_url(test.name()))
+        .env("RATATOSKR__BUS__URL", NATS_URL)
         .output()
         .expect("check-config runs");
 

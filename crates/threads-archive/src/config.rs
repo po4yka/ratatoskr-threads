@@ -9,6 +9,7 @@
 //! log aggregator.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 
 use secrecy::SecretString;
 use serde::Serialize;
@@ -22,10 +23,21 @@ pub struct Config {
     pub admin: AdminConfig,
     /// Owned durable storage configuration.
     pub storage: StorageConfig,
+    /// NATS configuration for provider-command consumption.
+    pub bus: BusConfig,
     /// Telemetry pipeline configuration.
     pub telemetry: TelemetryConfig,
     /// Resource and shutdown limits.
     pub limits: Limits,
+}
+
+/// The narrow NATS connection held by this service role.
+#[derive(Debug, Clone, Serialize)]
+pub struct BusConfig {
+    /// A credential-free `nats://` or `tls://` endpoint.
+    pub url: String,
+    /// Optional path to this role's NATS nkey seed; the seed itself never enters config.
+    pub nkey_seed_path: Option<PathBuf>,
 }
 
 /// Loopback-only operator listener configuration.
@@ -160,6 +172,12 @@ impl Config {
             }
             apply_entry(&mut config, key, value.as_ref(), &mut violations);
         }
+        if config.bus.url.is_empty() {
+            violations.push(Violation {
+                key: "RATATOSKR__BUS__URL".to_owned(),
+                rule: "is required for the Threads command consumer",
+            });
+        }
 
         if violations.is_empty() {
             Ok(config)
@@ -192,6 +210,21 @@ fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec
                 )),
             }
         }
+        "RATATOSKR__BUS__URL" => {
+            if valid_bus_url(value) {
+                value.clone_into(&mut config.bus.url);
+            } else {
+                violations.push(refused("must be a credential-free nats:// or tls:// URL"));
+            }
+        }
+        "RATATOSKR__BUS__NKEY_SEED_PATH" => {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                config.bus.nkey_seed_path = Some(path);
+            } else {
+                violations.push(refused("must be an absolute path to a readable nkey seed"));
+            }
+        }
         "RATATOSKR__TELEMETRY__LOG_FILTER" => {
             if value.trim().is_empty() {
                 violations.push(refused("must be a non-empty tracing filter expression"));
@@ -215,6 +248,12 @@ fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec
     }
 }
 
+fn valid_bus_url(value: &str) -> bool {
+    (value.starts_with("nats://") || value.starts_with("tls://"))
+        && !value.contains('@')
+        && value.len() <= 2048
+}
+
 fn parse_positive<T>(value: &str) -> Result<T, &'static str>
 where
     T: std::str::FromStr + Default + PartialOrd,
@@ -235,6 +274,10 @@ impl Default for Config {
                 listen_address: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9084),
             },
             storage: StorageConfig { database_url: None },
+            bus: BusConfig {
+                url: String::new(),
+                nkey_seed_path: None,
+            },
             telemetry: TelemetryConfig {
                 log_filter: "info".to_owned(),
             },
