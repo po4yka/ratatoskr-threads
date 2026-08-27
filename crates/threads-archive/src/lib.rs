@@ -17,6 +17,8 @@ pub mod capability;
 /// truthful unavailability observations.
 pub mod capture;
 pub mod config;
+/// Safe Data Export archive receipt, inspection, parsing, and reconciliation.
+pub mod data_export;
 /// The owned `PostgreSQL` pool and the embedded `threads_archive` schema.
 pub mod database;
 /// Privacy-safe observational linkage to completed Knowledge analyses.

@@ -115,6 +115,7 @@ fn only_implemented_lanes_claim_support() {
             AcquisitionMode::ExplicitCapture
                 | AcquisitionMode::PublicResolution
                 | AcquisitionMode::OwnAccountSync
+                | AcquisitionMode::DataExport
         ) {
             assert_eq!(
                 status,
@@ -134,8 +135,8 @@ fn only_implemented_lanes_claim_support() {
         .filter(|mode| mode.capability().status == SupportStatus::Supported)
         .count();
     assert_eq!(
-        supported, 3,
-        "exactly explicit capture, public resolution, and own-account sync may claim support today"
+        supported, 4,
+        "exactly explicit capture, public resolution, own-account sync, and Data Export may claim support today"
     );
 }
 

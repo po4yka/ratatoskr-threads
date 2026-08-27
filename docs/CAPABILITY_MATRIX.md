@@ -6,14 +6,19 @@ Threads' API surface is limited and evolving, and the monolith captured Threads 
 
 ## The matrix
 
-Explicit capture, public resolution, and own-account synchronization are implemented. Own-account synchronization runs only when current official capability evaluation allows it, records an opaque completed-page checkpoint, and never treats limited provider pages as account-history or native-Saved completeness. Remaining planned lanes stay unavailable until their implementation item flips them with a reviewed test change.
+Explicit capture, public resolution, own-account synchronization, and Data Export are implemented.
+Own-account synchronization runs only when current official capability evaluation allows it, records
+an opaque completed-page checkpoint, and never treats limited provider pages as account-history or
+native-Saved completeness. Data Export is a bounded, raw-first `threads-export-v1` observation,
+not an assertion that a supplied archive enumerates native Saved state. Legacy import remains
+unavailable until its implementation item flips it with a reviewed test change.
 
 | Mode | Status | Wire acquisition methods | Authority ceiling |
 |---|---|---|---|
 | `ExplicitCapture` | Supported | `share_extension`, `browser_extension`, `telegram_capture` | `explicit_user_capture` |
 | `PublicResolution` | Supported | `public_resolution` | `explicit_user_capture` |
 | `OwnAccountSync` | Supported | `official_api` | `authoritative_platform_state` |
-| `DataExport` | Planned | `data_export` | `export_observation` |
+| `DataExport` | Supported | `data_export` | `export_observation` |
 | `LegacyImport` | Planned | `legacy_import` | `legacy_observation` |
 
 ## Stated non-capabilities

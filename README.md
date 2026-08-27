@@ -2,7 +2,7 @@
 
 `ratatoskr-threads` is the Threads account and capture bounded context for Ratatoskr. It combines official user-authorized account capabilities with explicit capture of public posts, official public representations, and versioned Data Export imports.
 
-> **Status:** implementation plan items 1 through 7 are complete. Item 7 adds capability-aware scheduled own-post/reply scans with an opaque account checkpoint, raw-first official observations, authoritative projection swaps, and truthful no-ops when own-content access is unavailable. Data Export import remains planned.
+> **Status:** implementation plan items 1 through 8 are complete. Item 8 adds owner-scoped immutable Data Export receipts, bounded hostile-ZIP refusal, parser-versioned projection, raw retention for unknown sections, replay-safe source publication, and a completeness report that never turns export absence into deletion.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -168,20 +168,28 @@ A user upload is never relabeled as an official provider response.
 
 ## Data Export imports
 
-Threads exports are treated as immutable, versioned observations rather than one permanent schema.
+Threads exports are immutable, versioned observations rather than one permanent schema. An
+authenticated caller supplies its `user_ref`; receipt streaming hashes and stores the exact bytes
+before any inspection, bounded to 64 MiB. The run is unique per owner and archive digest, so a
+retry returns the existing receipt rather than replacing raw bytes or creating a second import.
 
-Import pipeline:
+The current parser accepts the synthetic/redacted `threads-export-v1` layout: a safe ZIP with
+`threads_export.json`, sorted `posts` and directed `relations`. Inspection rejects path traversal,
+absolute/backslash paths, more than 1,000 entries, path depth over 16, cumulative compressed bytes
+over 64 MiB, declared decompressed bytes over 256 MiB, and a ratio above 100:1. Optional extraction
+uses a caller-owned isolated directory and never writes an archive-supplied path outside it.
 
-1. store the original archive and SHA-256;
-2. safely inspect and extract it in isolation;
-3. detect provider schema and parser version;
-4. parse known records through staging tables;
-5. preserve unknown records as raw blobs;
-6. reconcile projects/posts/captures without assuming absence means deletion;
-7. produce a completeness and warning report;
-8. publish normalized events for accepted records.
+Each import reads the retained digest-verified blob, persists parser/version/run evidence, creates
+normalized posts and relations transactionally, and publishes Data Export observations with
+`export_observation` authority. Unknown ZIP sections remain linked to the immutable archive in
+`export_records` and make the run `completed_with_warnings`; they are never guessed as a newer
+schema or native Saved state.
 
-The importer does not promise that an export contains every native Saved item unless the detected schema explicitly supports and validates that claim.
+The report counts distinct export identities, captured identities that match, export-only
+identities, capture-only comparable identities, and captures lacking a stable identity. It is
+owner-scoped evidence of overlap, not a deletion signal or a claim that the archive is a complete
+native Saved list. A refused archive remains retained and its run is marked `failed` without a
+normalized projection.
 
 ## Official account connection
 
@@ -278,9 +286,9 @@ Every operation records acquisition method, authority, resolver/parser version, 
 3. Add explicit capture and public oEmbed resolution.
 4. Publish normalized social-source events.
 5. Integrate mobile Share Extensions and browser extension.
-6. Add safe versioned Data Export imports.
+6. Add encrypted official OAuth and capability discovery.
 7. Add official OAuth and own-account synchronization.
-8. Add safe versioned Data Export imports.
+8. Add safe versioned Data Export imports. ✓
 9. Integrate linked documents with Extractor and analysis with Knowledge.
 
 ## Workspace integration
@@ -289,4 +297,7 @@ Planned: `ratatoskr-workspace` will pin Threads with compatible social contracts
 
 ## Project status
 
-Implementation plan items 1 through 7 exist: the service owns schema/provenance, explicit capture and public resolution, social-source publication, encrypted official OAuth capability discovery, and checkpointed official own-post/reply observations. A scan stores raw provider evidence before normalization, never treats a partial page as deletion evidence, and performs no provider request when the capability is unavailable. Data Export import, media policy, and provider writes remain planned.
+Implementation plan items 1 through 8 exist: the service owns schema/provenance, explicit capture
+and public resolution, social-source publication, encrypted official OAuth capability discovery,
+checkpointed official own-post/reply observations, and safe raw-first Data Export reconciliation.
+Media policy and provider writes remain planned.

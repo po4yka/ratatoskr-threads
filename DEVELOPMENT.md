@@ -3,11 +3,17 @@
 > Status: Active development
 > Last reviewed: 2026-08-25
 
-Implementation plan items 1 through 7 are implemented. Item 7 provides capability-aware own-content scheduling, opaque checkpointed scans, raw-first official observations, atomic authoritative projection swaps, reply relations, and no-op results when own-content access is unavailable. Data Export import and media policy (items 8 and 9) remain planned.
+Implementation plan items 1 through 8 are implemented. Item 8 provides owner-scoped immutable
+archive receipts, safe bounded ZIP inspection/extraction, deterministic `threads-export-v1`
+projection and relations, unknown-section retention, replay-safe reconciliation, and persisted
+owner-scoped completeness evidence. An export's absence never changes a capture or becomes a
+deletion/native-Saved assertion. Media policy (item 9) remains planned.
 
 ## Intended toolchain
 
-Rust/Tokio (pinned by `rust-toolchain.toml` at 1.97.0), SQLx/PostgreSQL, axum, Reqwest/Rustls, tracing, Prometheus. Planned for later items: OAuth, safe archive import, NATS, provider fixtures/WireMock, testcontainers.
+Rust/Tokio (pinned by `rust-toolchain.toml` at 1.97.0), SQLx/PostgreSQL, axum, Reqwest/Rustls,
+`zip` with only its `deflate` feature, tracing, Prometheus. Planned for later items: NATS, provider
+fixtures/WireMock, testcontainers, and media policy.
 
 ## Code size limits
 

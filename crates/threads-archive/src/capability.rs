@@ -55,10 +55,11 @@ impl AcquisitionMode {
             // and relation normalization landed with item 4; event publication is item 5, OAuth
             // discovery item 6, own-post sync item 7, Data Export import item 8.
             // Legacy migration has no dedicated item yet and stays `Planned`.
-            Self::ExplicitCapture | Self::PublicResolution | Self::OwnAccountSync => {
-                SupportStatus::Supported
-            }
-            Self::DataExport | Self::LegacyImport => SupportStatus::Planned,
+            Self::ExplicitCapture
+            | Self::PublicResolution
+            | Self::OwnAccountSync
+            | Self::DataExport => SupportStatus::Supported,
+            Self::LegacyImport => SupportStatus::Planned,
         };
         ModeCapability {
             mode: self,
@@ -175,6 +176,14 @@ mod tests {
     fn own_account_sync_is_supported_after_item_seven() {
         assert_eq!(
             AcquisitionMode::OwnAccountSync.capability().status,
+            SupportStatus::Supported
+        );
+    }
+
+    #[test]
+    fn data_export_is_supported_after_item_eight() {
+        assert_eq!(
+            AcquisitionMode::DataExport.capability().status,
             SupportStatus::Supported
         );
     }

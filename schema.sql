@@ -144,7 +144,7 @@ create table threads_archive.raw_objects (
     observed_at   timestamptz not null,
     constraint raw_objects_object_kind_check
         check (object_kind in
-            ('oembed_response', 'api_response', 'export_section', 'unknown_export_record',
+            ('oembed_response', 'api_response', 'export_archive', 'export_section', 'unknown_export_record',
              'user_upload'))
 );
 
@@ -432,6 +432,7 @@ create table threads_archive.export_runs (
     user_ref            uuid        not null,
     archive_hash        bytea       not null,
     archive_blob_ref    text        not null,
+    archive_byte_size   bigint      not null,
     detected_version    text,
     parser_version      text        not null,
     outcome             text        not null,

@@ -18,7 +18,7 @@ The library SHALL expose a total lookup that, for each documented acquisition mo
 
 #### Scenario: Exactly the implemented lanes report supported
 - **WHEN** the support statuses of all five acquisition modes are inspected
-- **THEN** exactly `ExplicitCapture`, `PublicResolution`, and `OwnAccountSync` report `Supported` and every remaining mode reports `Planned`
+- **THEN** exactly `ExplicitCapture`, `PublicResolution`, `OwnAccountSync`, and `DataExport` report `Supported`, while `LegacyImport` reports `Planned`
 
 #### Scenario: Discovery does not enable a planned lane
 - **WHEN** official account discovery observes scopes that permit own-content synchronization

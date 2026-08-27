@@ -95,6 +95,32 @@ pub(crate) async fn append_official_fact(
     .await
 }
 
+/// Appends a source fact observed in an owner-authorized Data Export.
+pub(crate) async fn append_export_fact(
+    connection: &mut PgConnection,
+    owner: Uuid,
+    post_id: Uuid,
+) -> Result<(), PublishError> {
+    let captured_at: DateTime<Utc> =
+        sqlx::query_scalar("select updated_at from threads_archive.posts where post_id = $1")
+            .bind(post_id)
+            .fetch_optional(&mut *connection)
+            .await?
+            .ok_or(PublishError::NothingToPublish(post_id))?;
+    append_origin_fact(
+        connection,
+        SourceOrigin {
+            owner,
+            post_id,
+            captured_at,
+            capture_id: None,
+            capture_acquisition: None,
+            operation_id: post_id,
+        },
+    )
+    .await
+}
+
 async fn append_origin_fact(
     connection: &mut PgConnection,
     origin: SourceOrigin,
@@ -426,6 +452,7 @@ async fn ensure_source(
 fn acquisition_method(value: &str, capture_id: Uuid) -> Result<AcquisitionMethod, PublishError> {
     match value {
         "official_api" => Ok(AcquisitionMethod::OfficialApi),
+        "data_export" => Ok(AcquisitionMethod::DataExport),
         "share_extension" => Ok(AcquisitionMethod::ShareExtension),
         "browser_extension" => Ok(AcquisitionMethod::BrowserExtension),
         "public_resolution" => Ok(AcquisitionMethod::PublicResolution),

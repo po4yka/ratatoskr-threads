@@ -70,3 +70,14 @@ The first-version `threads_archive` schema SHALL contain a post-revision relatio
 #### Scenario: Fresh schema stores a revision and an unresolved edge
 - **WHEN** the current schema is applied to a fresh database
 - **THEN** a public-resolution revision and a relation with no local target post but target provider identity evidence can both be inserted under their declared constraints
+
+### Requirement: Export receipt and import state retain immutable evidence
+The current first-version schema SHALL represent an owner-scoped Data Export run with an immutable archive digest and BlobStore reference, receipt byte length, detected export version, parser version, typed terminal or running outcome, processed-record count, warnings, and a completeness report. It SHALL retain the raw archive as addressable evidence and link unknown export sections to that evidence, while preventing a second run for the same owner/archive digest and allowing byte-identical archives for different owners. This schema change SHALL be made in the current schema definition without a migration file or migration tooling.
+
+#### Scenario: Fresh schema stores a complete export receipt
+- **WHEN** the current schema is applied to a fresh database and a completed export run with an archive raw object, unknown-section evidence, and completeness report is inserted
+- **THEN** all receipt, parser, warning, and report fields persist and a duplicate `(user_ref, archive_hash)` insert is refused
+
+#### Scenario: Archive evidence does not imply a normalized projection
+- **WHEN** a failed hostile archive run is inserted with its immutable archive raw object
+- **THEN** the run and evidence persist while no post, relation, or capture row is required or created by the schema
