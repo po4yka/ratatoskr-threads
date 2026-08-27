@@ -41,4 +41,6 @@ deny = [
 unknown-registry = "deny"
 unknown-git      = "deny"
 required-git-spec = "rev"
-allow-git = []
+# Published Ratatoskr contract payloads and identifiers are consumed at an
+# exact reviewed revision; no other Git source is admitted.
+allow-git = ["https://github.com/po4yka/ratatoskr-contracts"]

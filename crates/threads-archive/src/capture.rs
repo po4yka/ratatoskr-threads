@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::capability::SavedAuthority;
 use crate::database::{Database, PersistenceError};
 use crate::permalink::{CanonicalizedUrl, Permalink, PermalinkError};
+use crate::publishing;
 
 /// The longest idempotency key intake accepts, in bytes.
 const MAX_IDEMPOTENCY_KEY_LEN: usize = 256;
@@ -625,6 +626,13 @@ impl<'a> CaptureStore<'a> {
         reason_code: &str,
     ) -> Result<(), CaptureError> {
         let mut transaction = self.pool.begin().await.map_err(PersistenceError::Query)?;
+        let post_id: Option<Uuid> = sqlx::query_scalar(
+            "select post_id from threads_archive.captures where capture_id = $1 for update",
+        )
+        .bind(capture_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(PersistenceError::Query)?;
 
         sqlx::query(
             "update threads_archive.captures set status = 'unavailable' where capture_id = $1",
@@ -634,19 +642,42 @@ impl<'a> CaptureStore<'a> {
         .await
         .map_err(PersistenceError::Query)?;
 
+        if let Some(post_id) = post_id {
+            sqlx::query(
+                "update threads_archive.posts set upstream_status = $2, updated_at = now() \
+                 where post_id = $1",
+            )
+            .bind(post_id)
+            .bind(availability)
+            .execute(&mut *transaction)
+            .await
+            .map_err(PersistenceError::Query)?;
+        }
+
         sqlx::query(
             "insert into threads_archive.tombstones \
              (tombstone_id, post_id, capture_id, availability, reason_code, resolver_version, \
               observed_at) \
-             values ($1, null, $2, $3, $4, null, now())",
+             values ($1, $2, $3, $4, $5, null, now())",
         )
         .bind(Uuid::now_v7())
+        .bind(post_id)
         .bind(capture_id)
         .bind(availability)
         .bind(reason_code)
         .execute(&mut *transaction)
         .await
         .map_err(PersistenceError::Query)?;
+
+        if post_id.is_some() {
+            publishing::append_fact(&mut transaction, capture_id)
+                .await
+                .map_err(|error| {
+                    CaptureError::Persistence(PersistenceError::Query(sqlx::Error::Protocol(
+                        error.to_string(),
+                    )))
+                })?;
+        }
 
         sqlx::query(
             "insert into threads_archive.capture_resolutions \

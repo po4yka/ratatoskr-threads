@@ -1,6 +1,7 @@
 //! Supported public-resolution contract.
 
 use crate::permalink::{CanonicalizedUrl, Permalink};
+use crate::publishing;
 use crate::relation::RelationKind;
 use crate::{Database, PersistenceError};
 use chrono::{DateTime, Utc};
@@ -392,6 +393,9 @@ impl<'a> PublicResolutionStore<'a> {
         sqlx::query("insert into threads_archive.capture_resolutions (resolution_id, capture_id, outcome, resolver_version, raw_object_id, observed_at) values ($1, $2, 'resolved', $3, $4, $5)")
             .bind(Uuid::now_v7()).bind(capture_id).bind(post.parser_version).bind(raw_object_id).bind(observed_at)
             .execute(&mut *transaction).await.map_err(PersistenceError::Query)?;
+        publishing::append_fact(&mut transaction, capture_id)
+            .await
+            .map_err(|error| PersistenceError::Query(sqlx::Error::Protocol(error.to_string())))?;
         transaction
             .commit()
             .await

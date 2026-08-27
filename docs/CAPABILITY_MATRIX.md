@@ -60,7 +60,7 @@ Gap: `post_relations` rows reference local `posts` rows through foreign keys, so
 
 ## Alignment review: `ratatoskr-social-contracts`
 
-Reviewed against `po4yka/ratatoskr-contracts` revision `fb88f94` (2026-08-25), files `crates/social-contracts/src/vocabulary.rs` and `crates/social-contracts/src/relation.rs`. The contract crate is not published to crates.io and no sibling repository consumes it as a dependency yet; this service mirrors its vocabularies as constants whose strings equal both the schema CHECK values and the contract serde representations, pinned value-for-value by the alignment tests in `tests/capability.rs`.
+Published social contracts are consumed directly from exact revision `9a9cdead0c689b946a52648eb76cc40158bd3c7b`, including the envelope and identifier types. Publication never mirrors wire payload structs locally.
 
 | Contract concept | Local counterpart | Verdict |
 |---|---|---|
@@ -68,14 +68,14 @@ Reviewed against `po4yka/ratatoskr-contracts` revision `fb88f94` (2026-08-25), f
 | `SavedAuthority` (4 closed variants) | `SavedAuthority` mirror; reachable set equals the vocabulary via mode ceilings; schema CHECKs accept exactly these four | aligned, exhaustive |
 | `SocialRelationKind` (open token grammar) | `RelationKind` validated token; `post_relations.relation_kind` CHECK widened to the same regex | aligned by widening the schema in place |
 | `SocialRelation` (kind + target external id) | `PostRelation` (explicit referencing side + kind + target) | aligned; direction made explicit data |
-| `UpstreamAvailability` (`available`, `unavailable`, `deleted_upstream`) | publication-time mapping from the six-value local vocabulary, decided at event publication (plan item 5) | gap — see below |
-| `CaptureCompleteness` (`complete`, `partial`) | not modeled locally yet | gap — consumed where captures and imports are recorded (plan items 3 and 8); partial requires warnings there |
+| `UpstreamAvailability` (`available`, `unavailable`, `deleted_upstream`) | `active -> available`; `deleted -> deleted_upstream`; observed inaccessible/unavailable states -> `unavailable` | aligned for published resolved sources |
+| `CaptureCompleteness` (`complete`, `partial`) | public-resolution source facts are `complete` for the bounded oEmbed representation; later media/export lanes own any partial warnings | aligned for item 5 |
 | `SocialFolderMembership` | not applicable | Threads exposes no provider-native saved-folder membership through a supported surface |
 
 Gaps found and their disposition:
 
 1. The local acquisition grammar extends the contract grammar with `telegram_capture` — Telegram is a first-class explicit-capture client lane named in AGENTS.md, so dropping or misfiling it would be dishonest. Disposition: propose `TelegramCapture` upstream to `ratatoskr-contracts`, or map it explicitly at event publication (plan item 5); until then the extension stays recorded here and every contract variant remains produced locally by exactly one mode.
-2. The contract's three-value `UpstreamAvailability` cannot express the local `unknown` honestly: publishing it as `unavailable` would claim a failed resolution that never happened. Disposition: decide the publication mapping when events are built (plan item 5); candidates are omitting availability for unknown sources or proposing an upstream extension.
-3. Contracts crate consumed as reviewed reference, not build dependency — deliberate until event publication (plan item 5) constructs real payloads; revisit then, ideally once the contracts repo decides how it publishes.
+2. The contract's three-value `UpstreamAvailability` cannot express a never-observed local `unknown`; unavailable-only captures therefore do not publish a source fact. Once a preserved post has an observed tombstone, the mapping above is emitted in `social.source.updated.v1`.
+3. `telegram_capture` remains a local explicit-capture lane absent from the current closed published `AcquisitionMethod` vocabulary. It is not silently relabeled in a social fact; publication for that lane requires an additive contract decision.
 4. Preservation state has no column yet — intentional until the media-handling plan item defines storage policy and budget; the type exists so the distinction precedes storage.
-5. Unresolved relation targets have no storage representation yet — plan item 4 owns it (see the relation-contract section).
+5. Unresolved relation targets are stored explicitly by provider id and optional permalink; item 4 owns their normalization.

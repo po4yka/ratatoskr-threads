@@ -18,9 +18,12 @@ pub mod capture;
 pub mod config;
 /// The owned `PostgreSQL` pool and the embedded `threads_archive` schema.
 pub mod database;
+/// Privacy-safe observational linkage to completed Knowledge analyses.
+pub mod knowledge;
 pub mod permalink;
 /// Supported public-resolution parsing and persistence.
 pub mod public_resolution;
+pub(crate) mod publishing;
 /// The reply, quote, and repost edge contract with its open relation-kind
 /// grammar aligned to the published social contracts.
 pub mod relation;

@@ -15,6 +15,14 @@ repository = "https://github.com/po4yka/ratatoskr-threads"
 [workspace.dependencies]
 ratatoskr-threads-archive           = { version = "=0.1.0", path = "crates/threads-archive" }
 
+# ---- cross-repository contracts ----
+# The social-source and event-envelope wire contracts are pinned to the accepted
+# producer/Knowledge boundary revision. The full revision, rather than the
+# transport URL, is the compatibility guarantee until registry publication.
+ratatoskr-social-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "9a9cdead0c689b946a52648eb76cc40158bd3c7b" }
+ratatoskr-event-envelope   = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "9a9cdead0c689b946a52648eb76cc40158bd3c7b" }
+ratatoskr-identifiers      = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "9a9cdead0c689b946a52648eb76cc40158bd3c7b" }
+
 # ---- async runtime and HTTP ----
 tokio      = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
 axum       = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
@@ -51,7 +59,7 @@ chrono = { version = "=0.4.45", default-features = false, features = ["clock", "
 # ---- identifiers ----
 # `v7` because ratatoskr-contracts mints UUIDv7 for internally minted identity, and the database
 # stores the same bytes; schema.sql deliberately carries no id DEFAULT that could produce v4.
-uuid = { version = "=1.24.1", features = ["v7"] }
+uuid = { version = "=1.24.1", features = ["v5", "v7"] }
 
 # ---- serialization and errors ----
 serde      = { version = "=1.0.229", features = ["derive"] }

@@ -2,7 +2,7 @@
 
 `ratatoskr-threads` is the Threads account and capture bounded context for Ratatoskr. It combines official user-authorized account capabilities with explicit capture of public posts, official public representations, and versioned Data Export imports.
 
-> **Status:** implementation plan items 1 through 4 are complete: a Rust service runs locally against PostgreSQL with typed strict configuration, structured telemetry, operator health routes (`/health/live`, `/health/ready`, `/metrics`, `/version`), typed errors, and the first-version `threads_archive` schema applied at startup; the capability matrix and provenance/relation contracts are defined in code (see `docs/CAPABILITY_MATRIX.md`); and explicit-capture intake exists in the library — permalink canonicalization, idempotent capture records with pinned `explicit_user_capture` provenance, and truthful unavailable-fallback records (`crates/threads-archive` `capture` and `permalink` modules). Item 4 adds Rustls-only resolution through approved Threads oEmbed HTTPS surfaces, immutable content-addressed raw responses, parser-versioned normalized revisions, and first-class reply/quote relations with explicit orphan targets and cycle refusal (`public_resolution`). Items 5 through 9 — event publication, OAuth, own-post synchronization, and Data Export import — remain planned.
+> **Status:** implementation plan items 1 through 5 are complete: a Rust service runs locally against PostgreSQL with typed strict configuration, structured telemetry, operator health routes (`/health/live`, `/health/ready`, `/metrics`, `/version`), typed errors, and the first-version `threads_archive` schema applied at startup; the capability matrix and provenance/relation contracts are defined in code (see `docs/CAPABILITY_MATRIX.md`); and explicit-capture intake exists in the library — permalink canonicalization, idempotent capture records with pinned `explicit_user_capture` provenance, and truthful unavailable-fallback records (`crates/threads-archive` `capture` and `permalink` modules). Item 4 adds Rustls-only resolution through approved Threads oEmbed HTTPS surfaces, immutable content-addressed raw responses, parser-versioned normalized revisions, and first-class reply/quote relations with explicit orphan targets and cycle refusal (`public_resolution`). Item 5 publishes state-carried `social.source.captured.v1` and `social.source.updated.v1` facts transactionally, links only exact-digest Knowledge completions through an inbox, and republishes provider deletion as `deleted_upstream` without erasing local evidence. Items 6 through 9 — OAuth, own-post synchronization, and Data Export import — remain planned.
 
 > [!IMPORTANT]
 > **Ratatoskr is in development.** No database holds data that has to survive a schema change.
@@ -104,6 +104,9 @@ raw_objects
 tombstones
 outbox_events
 inbox_events
+social_sources
+social_source_revisions
+social_analysis_links
 ```
 
 Rows are written by implemented and later capabilities; public-resolution rows retain immutable raw
@@ -125,7 +128,7 @@ Clients submit a capture through Platform with an idempotency key. Threads then:
 4. retrieves the supported public representation;
 5. stores raw evidence and normalized metadata;
 6. records warnings or unavailable state without losing the user's note;
-7. publishes `social.source.upserted.v1`;
+7. transactionally appends a contract-conformant `social.source.captured.v1` or `social.source.updated.v1` fact;
 8. lets Knowledge perform optional analysis asynchronously.
 
 A replay of the same capture converges on the same local source record while preserving new notes or collection links according to their owning context.
@@ -219,8 +222,10 @@ threads.capture.resolved.v1
 threads.capture.unavailable.v1
 threads.export.ingest_requested.v1
 threads.export.ingested.v1
-social.source.upserted.v1
-social.source.unavailable.v1
+social.source.captured.v1
+social.source.updated.v1
+social.source.removed.v1 # reserved for a future local-library deletion, never a provider tombstone
+knowledge.analysis.completed.v1
 ```
 
 Handlers are idempotent under at-least-once delivery. Capture, import, and account-sync results retain separate provenance.

@@ -321,6 +321,61 @@ comment on table threads_archive.capture_resolutions is
     'Public resolver/oEmbed observations per capture, with the raw response kept as evidence.';
 
 -- ---------------------------------------------------------------------------------------------
+-- social-source projections
+-- ---------------------------------------------------------------------------------------------
+--
+-- One tenant can hold a provider post through several capture intents. The
+-- projection keeps that library identity stable while its revisions are
+-- append-only, allowing the outbox and Knowledge linkage to name exact facts.
+
+create table threads_archive.social_sources (
+    social_source_id uuid        primary key,
+    user_ref         uuid        not null,
+    post_id          uuid        not null,
+    first_capture_id uuid        not null,
+    created_at       timestamptz not null default now(),
+    constraint social_sources_user_post_key unique (user_ref, post_id),
+    constraint social_sources_post_id_fkey foreign key (post_id)
+        references threads_archive.posts (post_id),
+    constraint social_sources_first_capture_id_fkey foreign key (first_capture_id)
+        references threads_archive.captures (capture_id)
+);
+
+comment on table threads_archive.social_sources is
+    'Tenant-scoped stable identities for normalized Threads posts published as SocialSource facts.';
+
+create table threads_archive.social_source_revisions (
+    source_revision_id uuid        primary key,
+    social_source_id   uuid        not null,
+    content_digest     text        not null,
+    snapshot           jsonb       not null,
+    observed_at        timestamptz not null,
+    constraint social_source_revisions_source_digest_key
+        unique (social_source_id, content_digest),
+    constraint social_source_revisions_social_source_id_fkey foreign key (social_source_id)
+        references threads_archive.social_sources (social_source_id)
+);
+
+comment on table threads_archive.social_source_revisions is
+    'Immutable published normalized source revisions, keyed by the digest Knowledge uses for linkage.';
+
+create table threads_archive.social_analysis_links (
+    completion_event_id uuid        primary key,
+    user_ref            uuid        not null,
+    social_source_id    uuid        not null,
+    content_digest      text        not null,
+    completed_at        timestamptz not null,
+    linked_at           timestamptz not null default now(),
+    constraint social_analysis_links_social_source_id_fkey foreign key (social_source_id)
+        references threads_archive.social_sources (social_source_id),
+    constraint social_analysis_links_source_digest_fkey foreign key (social_source_id, content_digest)
+        references threads_archive.social_source_revisions (social_source_id, content_digest)
+);
+
+comment on table threads_archive.social_analysis_links is
+    'Privacy-safe Knowledge completion linkage for an exact published source revision; no result body or Knowledge run identity is stored.';
+
+-- ---------------------------------------------------------------------------------------------
 -- export_runs
 -- ---------------------------------------------------------------------------------------------
 --

@@ -3,7 +3,7 @@
 > Status: Active development
 > Last reviewed: 2026-08-25
 
-Implementation plan items 1 through 4 are implemented: a Rust/Tokio service with typed strict configuration, structured telemetry, operator health routes, typed errors, and the first-version `threads_archive` schema applied at startup; explicit-capture intake in the library — permalink canonicalization (`crates/threads-archive` `permalink`), idempotent capture records with pinned provenance, and truthful unavailable fallbacks (`capture`); and public resolution (`public_resolution`). The public resolver is Rustls-only and accepts only approved Threads oEmbed HTTPS surfaces, retains content-addressed raw evidence before append-only parser-versioned revisions, and stores reply/quote structure as directed relation rows with explicit unresolved targets and cycle refusal. Items 5 through 9 — event publication, account OAuth, own-post synchronization, and Data Export import — remain planned.
+Implementation plan items 1 through 5 are implemented: a Rust/Tokio service with typed strict configuration, structured telemetry, operator health routes, typed errors, and the first-version `threads_archive` schema applied at startup; explicit-capture intake in the library — permalink canonicalization (`crates/threads-archive` `permalink`), idempotent capture records with pinned provenance, and truthful unavailable fallbacks (`capture`); and public resolution (`public_resolution`). The public resolver is Rustls-only and accepts only approved Threads oEmbed HTTPS surfaces, retains content-addressed raw evidence before append-only parser-versioned revisions, and stores reply/quote structure as directed relation rows with explicit unresolved targets and cycle refusal. Item 5 pins the published social contracts and transactionally writes state-carried `social.source.captured.v1`/`social.source.updated.v1` envelopes. Those facts are the asynchronous Knowledge analysis input; completed analyses return only an inbox-deduplicated `(owner, social_source_id, content_digest, completed_at)` linkage. A provider tombstone yields `deleted_upstream` on an update and never a local-library removal. Items 6 through 9 — account OAuth, own-post synchronization, and Data Export import — remain planned.
 
 ## Intended toolchain
 
@@ -64,6 +64,7 @@ invalid).
 3. Resolve only public content through supported official mechanisms; preserve unavailable/private state.
 4. Store raw export/capture evidence before normalization and preserve unknown records.
 5. Test privacy, expiry, replay, importer limits, media policy, and no-cookie/no-hidden-API invariants.
+6. Treat `social.source.captured.v1` and `social.source.updated.v1` as facts that request downstream analysis; preserve only digest-scoped completion linkage locally.
 
 Default tests use synthetic exports and no personal account credentials.
 
