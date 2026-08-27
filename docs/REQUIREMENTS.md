@@ -22,3 +22,19 @@ Authoritative native Saved synchronization when no supported endpoint exists, pr
 - Provider writes require separate capability, consent, idempotency, and audit.
 
 First slice: explicit public permalink -> resolution -> relation-aware SocialSource -> Knowledge indexing -> unavailable fallback.
+
+## Item 9 lifecycle requirements
+
+- Media byte retention defaults to metadata-only and requires affirmative rights, supported
+  acquisition/type/MIME, sufficient URL lifetime, known finite sizes, owner budget, and explicit
+  action where required.
+- Capture/connection deletion must enumerate every owned table/blob class, refuse cross-owner or
+  unknown targets without mutation, preserve shared holdings, erase final content and credentials,
+  propagate one typed Knowledge removal fact, and replay idempotently.
+- Automatic public re-resolution must admit only due live retryable captures and reserve finite
+  item/request/byte/deadline/concurrency/provider budgets before I/O.
+- Parser reprocessing must verify the retained receipt and exact parser, make dry-run read-only and
+  report-identical to apply, preserve omitted/unknown projections, checkpoint apply, and replay.
+
+Normal acceptance uses synthetic/redacted archives. A real protected Threads export remains an
+explicit external validation gap and must not be claimed from fixture coverage.

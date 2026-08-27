@@ -276,6 +276,109 @@ async fn foreign_or_stale_knowledge_completion_does_not_link() {
 }
 
 #[tokio::test]
+async fn late_knowledge_completion_cannot_resurrect_a_locally_removed_source() {
+    let database = TestDatabase::create()
+        .await
+        .expect("a disposable database is available");
+    let owner = Uuid::now_v7();
+    let post_id = Uuid::now_v7();
+    sqlx::query(
+        "insert into threads_archive.posts \
+         (post_id, provider_post_id, permalink, post_kind, acquisition_method, saved_authority, upstream_status) \
+         values ($1, 'late-completion-post', 'https://www.threads.net/@safe/post/late', 'post', \
+          'public_resolution', 'explicit_user_capture', 'active')",
+    )
+    .bind(post_id)
+    .execute(database.database.pool())
+    .await
+    .expect("post stores");
+    let source_id = Uuid::now_v7();
+    sqlx::query(
+        "insert into threads_archive.social_sources \
+         (social_source_id, user_ref, post_id) values ($1, $2, $3)",
+    )
+    .bind(source_id)
+    .bind(owner)
+    .bind(post_id)
+    .execute(database.database.pool())
+    .await
+    .expect("source stores");
+    let digest = "a".repeat(64);
+    sqlx::query(
+        "insert into threads_archive.social_source_revisions \
+         (source_revision_id, social_source_id, content_digest, snapshot, observed_at) \
+         values ($1, $2, $3, '{}', now())",
+    )
+    .bind(Uuid::now_v7())
+    .bind(source_id)
+    .bind(&digest)
+    .execute(database.database.pool())
+    .await
+    .expect("source revision stores");
+    let operation_id = Uuid::now_v7();
+    sqlx::query(
+        "insert into threads_archive.deletion_operations \
+         (operation_id, user_ref, target_kind, target_id, reason, state, requested_at, finished_at) \
+         values ($1, $2, 'capture', $3, 'user_requested', 'complete', now(), now())",
+    )
+    .bind(operation_id)
+    .bind(owner)
+    .bind(Uuid::now_v7())
+    .execute(database.database.pool())
+    .await
+    .expect("deletion audit stores");
+    sqlx::query(
+        "insert into threads_archive.local_source_removals \
+         (user_ref, social_source_id, post_id, operation_id, reason, removed_at) \
+         values ($1, $2, $3, $4, 'user_requested', now())",
+    )
+    .bind(owner)
+    .bind(source_id)
+    .bind(post_id)
+    .bind(operation_id)
+    .execute(database.database.pool())
+    .await
+    .expect("local removal guard stores");
+    let completion = SocialSourceAnalysisCompleted {
+        owner: TenantRef::parse(&format!("user:{owner}")).expect("fixture owner parses"),
+        social_source_id: SocialSourceId::parse(&source_id.to_string())
+            .expect("fixture source id parses"),
+        content_digest: ratatoskr_identifiers::ContentDigest {
+            algorithm: ratatoskr_identifiers::DigestAlgorithm::Sha256,
+            hex: ratatoskr_identifiers::DigestHex::parse(&digest).expect("fixture digest parses"),
+        },
+        completed_at: WireTimestamp::now(),
+        extensions: Extensions::default(),
+    };
+    let event_id = Uuid::now_v7();
+
+    let first = KnowledgeCompletionStore::new(&database.database)
+        .record(event_id, &completion)
+        .await
+        .expect("late completion is safely consumed");
+    let replay = KnowledgeCompletionStore::new(&database.database)
+        .record(event_id, &completion)
+        .await
+        .expect("late completion replay is safe");
+    let (links, outcome): (i64, String) = sqlx::query_as(
+        "select \
+           (select count(*) from threads_archive.social_analysis_links), \
+           (select handler_outcome from threads_archive.inbox_events \
+            where consumer_name = 'threads-social-source-knowledge' and event_id = $1)",
+    )
+    .bind(event_id)
+    .fetch_one(database.database.pool())
+    .await
+    .expect("late completion outcome reads");
+
+    assert_eq!(first, CompletionLinkOutcome::LocallyRemoved);
+    assert_eq!(replay, CompletionLinkOutcome::Duplicate);
+    assert_eq!((links, outcome), (0, "locally_removed".to_owned()));
+
+    database.cleanup().await.expect("cleanup succeeds");
+}
+
+#[tokio::test]
 async fn unavailable_only_capture_does_not_append_social_source_fact() {
     let database = TestDatabase::create()
         .await

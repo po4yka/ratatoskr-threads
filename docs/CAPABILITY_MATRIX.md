@@ -82,5 +82,16 @@ Gaps found and their disposition:
 1. The local acquisition grammar extends the contract grammar with `telegram_capture` — Telegram is a first-class explicit-capture client lane named in AGENTS.md, so dropping or misfiling it would be dishonest. Disposition: propose `TelegramCapture` upstream to `ratatoskr-contracts`, or map it explicitly at event publication (plan item 5); until then the extension stays recorded here and every contract variant remains produced locally by exactly one mode.
 2. The contract's three-value `UpstreamAvailability` cannot express a never-observed local `unknown`; unavailable-only captures therefore do not publish a source fact. Once a preserved post has an observed tombstone, the mapping above is emitted in `social.source.updated.v1`.
 3. `telegram_capture` remains a local explicit-capture lane absent from the current closed published `AcquisitionMethod` vocabulary. It is not silently relabeled in a social fact; publication for that lane requires an additive contract decision.
-4. Preservation state has no column yet — intentional until the media-handling plan item defines storage policy and budget; the type exists so the distinction precedes storage.
+4. Media preservation is now explicit: `metadata_only` is the default; `explicit_archive` and
+   `policy_archive` require complete blob reference, digest, and length evidence. It does not add
+   native Saved authority.
 5. Unresolved relation targets are stored explicitly by provider id and optional permalink; item 4 owns their normalization.
+
+## Item 9 capability limits
+
+| Capability | Implemented guarantee | Limit |
+|---|---|---|
+| Media bytes | fail-closed eligibility, bounded verified storage, reference-safe expiry | no automatic all-media download; user uploads remain separate provenance |
+| Privacy deletion | owner-bound capture/connection preview and replay-safe apply; typed Knowledge removal propagation | local removal never implies provider deletion or native unsave |
+| Re-resolution | due/live selection and finite item/request/byte/deadline/concurrency/provider guards | private, deleted, unsupported, and locally removed captures are terminal |
+| Export parser reprocessing | exact parser registry, dry-run/apply fidelity, checkpoints and replay | synthetic/redacted CI fixtures do not prove compatibility with a real protected export |

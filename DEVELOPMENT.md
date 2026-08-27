@@ -3,17 +3,18 @@
 > Status: Active development
 > Last reviewed: 2026-08-25
 
-Implementation plan items 1 through 8 are implemented. Item 8 provides owner-scoped immutable
+Implementation plan items 1 through 9 are implemented. Item 8 provides owner-scoped immutable
 archive receipts, safe bounded ZIP inspection/extraction, deterministic `threads-export-v1`
 projection and relations, unknown-section retention, replay-safe reconciliation, and persisted
 owner-scoped completeness evidence. An export's absence never changes a capture or becomes a
-deletion/native-Saved assertion. Media policy (item 9) remains planned.
+deletion/native-Saved assertion. Item 9 adds fail-closed media retention, owner deletion and
+Knowledge removal propagation, finite public re-resolution, and restartable parser reprocessing.
 
 ## Intended toolchain
 
 Rust/Tokio (pinned by `rust-toolchain.toml` at 1.97.0), SQLx/PostgreSQL, axum, Reqwest/Rustls,
-`zip` with only its `deflate` feature, tracing, Prometheus, and NATS. Planned for later items:
-provider fixtures/WireMock, testcontainers, and media policy.
+`zip` with only its `deflate` feature, tracing, Prometheus, NATS, and media policy. Planned for
+later items: provider fixtures/WireMock and testcontainers.
 
 `RATATOSKR__BUS__URL` is required. Production supplies an nkey through
 `RATATOSKR__BUS__NKEY_SEED_PATH`; the local unauthenticated NATS test broker may omit it.
@@ -65,6 +66,19 @@ cargo run -p ratatoskr-threads-archive-service
 `RATATOSKR__STORAGE__DATABASE_URL=postgres://threads:threads@127.0.0.1:5437/threads` is
 required to start; `<binary> check-config` validates configuration without binding (exit 78 when
 invalid).
+
+Parser reprocessing is an explicit operator command:
+
+```bash
+ratatoskr-threads-archive reprocess-export dry-run --owner UUID --run-id UUID --parser threads-export-v1-parser-1
+ratatoskr-threads-archive reprocess-export apply --owner UUID --run-id UUID --parser threads-export-v1-parser-1 --operation-id UUID
+```
+
+The command writes one newline-terminated JSON document to stdout, diagnostics only to stderr, and
+uses exits `0` success, `1` operational/output failure, `2` grammar failure, and `78` configuration
+failure. Dry-run writes no run, item, checkpoint, outbox, or blob state. Apply validates plan/state
+fingerprints and resumes committed chunks. It never changes `schema.sql` and is not database
+migration tooling.
 
 ## Workflow
 

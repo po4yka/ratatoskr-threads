@@ -11,23 +11,31 @@ use ratatoskr_threads_archive::Database;
 use ratatoskr_threads_archive::test_support::{TestDatabase, admin_url};
 
 /// The relations AGENTS.md's persistence vocabulary declares, no more, no fewer.
-const DECLARED_TABLES: [&str; 20] = [
+const DECLARED_TABLES: [&str; 28] = [
     "account_budgets",
     "account_sync_checkpoints",
     "accounts",
+    "blob_deletion_tasks",
     "captures",
     "capture_resolutions",
     "credentials",
     "credential_audit",
+    "deletion_effects",
+    "deletion_operations",
     "export_records",
+    "export_reprocessing_items",
+    "export_reprocessing_runs",
     "export_runs",
     "inbox_events",
+    "local_source_removals",
     "media",
     "outbox_events",
     "post_relations",
     "post_revisions",
     "posts",
     "raw_objects",
+    "reresolution_items",
+    "reresolution_runs",
     "social_analysis_links",
     "social_source_revisions",
     "social_sources",
@@ -125,6 +133,57 @@ async fn fresh_apply_creates_every_declared_table_and_nothing_else() {
     assert_eq!(
         tables, declared,
         "the applied schema must match the declared inventory exactly"
+    );
+
+    test.cleanup().await.expect("cleanup must drop");
+}
+
+#[tokio::test]
+async fn lifecycle_schema_exposes_policy_deletion_reresolution_and_reprocessing_state() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let pool = test.database.pool();
+
+    let tables = archive_tables(pool).await;
+    let required = [
+        "blob_deletion_tasks",
+        "deletion_effects",
+        "deletion_operations",
+        "export_reprocessing_items",
+        "export_reprocessing_runs",
+        "local_source_removals",
+        "reresolution_items",
+        "reresolution_runs",
+    ];
+    let missing: Vec<&str> = required
+        .into_iter()
+        .filter(|required| !tables.iter().any(|table| table == required))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "item-9 lifecycle tables are missing: {missing:?}"
+    );
+
+    let media_columns: Vec<(String,)> = sqlx::query_as(
+        "select column_name from information_schema.columns \
+         where table_schema = 'threads_archive' and table_name = 'media' \
+         and column_name = any($1) order by column_name",
+    )
+    .bind(vec![
+        "retention_class",
+        "retention_deadline",
+        "retention_reason",
+    ])
+    .fetch_all(pool)
+    .await
+    .expect("the media policy column query must answer");
+    assert_eq!(
+        media_columns,
+        vec![
+            ("retention_class".to_owned(),),
+            ("retention_deadline".to_owned(),),
+            ("retention_reason".to_owned(),),
+        ],
+        "media retention policy state must be explicit"
     );
 
     test.cleanup().await.expect("cleanup must drop");

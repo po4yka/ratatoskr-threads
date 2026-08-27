@@ -8,7 +8,7 @@
 6. Add encrypted official OAuth and account capability discovery.
 7. Add own-post/reply synchronization.
 8. Implement immutable safe Data Export import and completeness report.
-9. Add media/privacy/re-resolution and restartable import tooling.
+9. **Complete:** media retention, privacy deletion propagation, budgeted re-resolution, and restartable parser reprocessing with dry-run reports.
 10. Add optional publishing/reply only after separate consent ADR and tests.
 
 Definition of Done: provenance/relations are correct, no hidden session access exists, imports are safe, writes explicit, private data authorized, schema/events/tests and the planned workspace flow pass.

@@ -20,3 +20,18 @@
 5. Raw exports precede parsing; unknown variants survive.
 6. Missing export records do not prove deletion.
 7. Read connection does not imply publishing consent.
+
+## Lifecycle terms
+
+- **Media fetch lease:** immutable finite authorization created only after every rights/type/lifetime
+  and storage guard is known and available.
+- **Local source removal:** owner-library state, distinct from an upstream availability tombstone.
+- **Deletion plan:** total content-free classification of every owned row/blob class for one target.
+- **Re-resolution run:** due public refresh work admitted within item/request/byte/deadline,
+  concurrency, and endpoint budgets.
+- **Parser reprocessing:** deterministic reinterpretation of one verified retained export using an
+  exact registered parser. It is not a database migration.
+
+Producer/consumer meaning is unchanged for captured/updated facts. The new removal producer fact
+means only that Ratatoskr no longer holds the source; Knowledge owns deletion of summaries,
+embeddings, and search projections.

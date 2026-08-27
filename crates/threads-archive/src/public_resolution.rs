@@ -1,5 +1,7 @@
 //! Supported public-resolution contract.
 
+mod raw_object_delete;
+
 use crate::permalink::{CanonicalizedUrl, Permalink};
 use crate::publishing;
 use crate::relation::RelationKind;
@@ -122,7 +124,7 @@ impl RawObjectStore {
     /// Stores one raw response before normalization, rejecting write or digest conflicts.
     pub(crate) async fn store(&self, bytes: &[u8]) -> Result<StoredRaw, PublicResolutionError> {
         let content_hash = Sha256::digest(bytes).to_vec();
-        let digest = hex(&content_hash);
+        let digest = raw_object_delete::hex(&content_hash);
         let path = self.root.join("sha256").join(&digest);
         let byte_size = i64::try_from(bytes.len()).map_err(|_| {
             PublicResolutionError::Persistence(PersistenceError::Query(sqlx::Error::Configuration(
@@ -133,7 +135,7 @@ impl RawObjectStore {
             .await
             .map_err(PublicResolutionError::RawStorage)?
         {
-            verify_raw_object(&path, &content_hash).await?;
+            raw_object_delete::verify_raw_object(&path, &content_hash).await?;
         } else {
             self.create_once(&path, bytes, &content_hash).await?;
         }
@@ -173,7 +175,7 @@ impl RawObjectStore {
             .await
             .map_err(PublicResolutionError::RawStorage)?;
         drop(output);
-        let digest = hex(&content_hash);
+        let digest = raw_object_delete::hex(&content_hash);
         let path = self.root.join("sha256").join(&digest);
         self.promote_temporary(&temporary, &path, &content_hash)
             .await?;
@@ -192,7 +194,7 @@ impl RawObjectStore {
         blob_ref: &str,
         content_hash: &[u8],
     ) -> Result<Vec<u8>, PublicResolutionError> {
-        let digest = hex(content_hash);
+        let digest = raw_object_delete::hex(content_hash);
         if blob_ref != format!("threads-archive/raw/sha256/{digest}") {
             return Err(PublicResolutionError::RawDigestMismatch);
         }
@@ -249,7 +251,7 @@ impl RawObjectStore {
                 fs::remove_file(temporary)
                     .await
                     .map_err(PublicResolutionError::RawStorage)?;
-                verify_raw_object(path, content_hash).await
+                raw_object_delete::verify_raw_object(path, content_hash).await
             }
             Err(error) => Err(PublicResolutionError::RawStorage(error)),
         }
@@ -282,7 +284,7 @@ impl RawObjectStore {
                     .map_err(PublicResolutionError::RawStorage)
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                verify_raw_object(path, content_hash).await
+                raw_object_delete::verify_raw_object(path, content_hash).await
             }
             Err(error) => Err(PublicResolutionError::RawStorage(error)),
         }
@@ -338,17 +340,6 @@ where
         )))
     })?;
     Ok((hasher.finalize().to_vec(), byte_size))
-}
-
-async fn verify_raw_object(path: &Path, expected_hash: &[u8]) -> Result<(), PublicResolutionError> {
-    let existing = fs::read(path)
-        .await
-        .map_err(PublicResolutionError::RawStorage)?;
-    if Sha256::digest(existing).as_slice() == expected_hash {
-        Ok(())
-    } else {
-        Err(PublicResolutionError::RawDigestMismatch)
-    }
 }
 
 /// One relation supplied by an approved public observation.
@@ -649,15 +640,6 @@ async fn record_relations(
         .map_err(PersistenceError::Query)?;
     }
     Ok(())
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut result = String::with_capacity(bytes.len().saturating_mul(2));
-    for byte in bytes {
-        use std::fmt::Write as _;
-        let _ = write!(result, "{byte:02x}");
-    }
-    result
 }
 
 /// Parses one approved public oEmbed response for a requested permalink.

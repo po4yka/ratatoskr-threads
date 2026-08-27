@@ -23,18 +23,26 @@ pub mod capture;
 pub mod config;
 /// Safe Data Export archive receipt, inspection, parsing, and reconciliation.
 pub mod data_export;
+/// Deterministic parser-version reprocessing over retained immutable exports.
+pub mod data_export_reprocessing;
 /// The owned `PostgreSQL` pool and the embedded `threads_archive` schema.
 pub mod database;
 /// Privacy-safe observational linkage to completed Knowledge analyses.
 pub mod knowledge;
+/// Explicit policy for provider-media metadata, byte archival, and retention.
+pub mod media_retention;
 /// Provider-specific JetStream command consumption and transactional-outbox publication.
 pub mod nats;
 /// Official Threads OAuth credentials and account capability discovery.
 pub mod oauth;
 pub mod permalink;
+/// Closed owned-data inventory and owner privacy-deletion classifications.
+pub mod privacy_deletion;
 /// Supported public-resolution parsing and persistence.
 pub mod public_resolution;
 pub(crate) mod publishing;
+/// Deterministic candidate selection and finite budget admission for public re-resolution.
+pub mod re_resolution;
 /// The reply, quote, and repost edge contract with its open relation-kind
 /// grammar aligned to the published social contracts.
 pub mod relation;
