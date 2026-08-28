@@ -1,6 +1,6 @@
 //! Platform-routed explicit browser-capture commands.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound as _, Utc};
 use ratatoskr_event_envelope::{CommandEnvelope, CommandError};
 use ratatoskr_identifiers::{DigestAlgorithm, OperationId};
 use ratatoskr_social_contracts::{
@@ -80,9 +80,14 @@ impl BrowserCaptureCommand {
         let original_permalink = payload.original_permalink.to_string();
         let canonicalized = CanonicalizedUrl::try_from(original_permalink.as_str())
             .map_err(|_| BrowserCaptureCommandError::InvalidPermalink)?;
+        // `captures.captured_at` is `timestamptz`, a microsecond-resolution wire type; truncate
+        // here so the in-memory instant already matches what a later read of the persisted row
+        // will return, rather than letting Postgres silently drop the sub-microsecond remainder
+        // of `WireTimestamp`'s nanosecond precision on write.
         let captured_at = DateTime::parse_from_rfc3339(&payload.captured_at.to_wire())
             .map_err(|_| BrowserCaptureCommandError::InvalidCapturedAt)?
-            .with_timezone(&Utc);
+            .with_timezone(&Utc)
+            .trunc_subsecs(6);
         let idempotency_key = match payload.idempotency_key.algorithm {
             DigestAlgorithm::Sha256 => format!("sha256:{}", payload.idempotency_key.hex),
             _ => return Err(BrowserCaptureCommandError::UnsupportedIdempotencyDigest),

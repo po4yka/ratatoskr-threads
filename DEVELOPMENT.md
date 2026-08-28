@@ -50,7 +50,9 @@ cargo build --workspace --locked --release
 ```
 
 `.github/workflows/ci.yml` runs this list against PostgreSQL 17 (service container in CI,
-`compose.yaml` on a laptop: user/password/database `threads`, published on `127.0.0.1:5437`). The
+`compose.yaml` on a laptop: user/password/database `threads`, published on `127.0.0.1:5437`) and a
+JetStream-enabled NATS broker (an explicit `docker run ... -js` step in CI, since a `services:`
+container cannot be given a command; `compose.yaml` on a laptop, published on `127.0.0.1:5422`). The
 suite creates disposable databases from the embedded schema per test; without the server the suite
 fails rather than skips. CI additionally runs the 850-line file ratchet and a guard asserting this
 command list is byte-identical to `.github/workflows/ci.yml`.

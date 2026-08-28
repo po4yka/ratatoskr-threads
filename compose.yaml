@@ -2,7 +2,10 @@ services:
   nats:
     image: nats:2-alpine
     container_name: ratatoskr-threads-nats
-    command: ["-js"]
+    # `-js` replaces the image's default command outright rather than extending it, so the
+    # `monitor_port: 8222` the default `/etc/nats/nats-server.conf` would have set is gone too;
+    # `-m 8222` restores it, since the healthcheck below depends on it.
+    command: ["-js", "-m", "8222"]
     ports:
       - "127.0.0.1:5422:4222"
     healthcheck:

@@ -66,6 +66,27 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      # NATS runs as an explicit container rather than a `services:` entry: a service container
+      # cannot be given a command, and `-js` is not the `nats:2-alpine` image's default. Without
+      # the flag JetStream stays disabled, and the browser-capture inbox's stream lookups, the
+      # service boot smoke test, and export reprocessing all fail for a reason that has nothing to
+      # do with the code under test. Passing `-js` also replaces the image's default command
+      # entirely rather than extending it, so `-m 8222` is required too or the monitor port
+      # `/healthz` below polls never starts. Port 5422 matches compose.yaml and the `NATS_URL`
+      # fallback the affected test binaries already hardcode.
+      - name: Start NATS with JetStream
+        run: |
+          docker run -d --name ratatoskr-threads-ci-nats \
+            -p 127.0.0.1:5422:4222 -p 127.0.0.1:8222:8222 \
+            nats:2-alpine@sha256:d4ac35882ac65aff236cd65b9d3fa4d24332c681e1a85f94eedccd3cdd65b1da -js -m 8222
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8222/healthz | grep -q ok; then exit 0; fi
+            sleep 1
+          done
+          echo "::error::NATS did not become healthy"
+          docker logs ratatoskr-threads-ci-nats >&2
+          exit 1
+
       - run: cargo fetch --locked
 
       # Reads RustSec, the licence set, duplicate versions and the source policy. Nothing else in
