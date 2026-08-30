@@ -190,6 +190,78 @@ async fn lifecycle_schema_exposes_policy_deletion_reresolution_and_reprocessing_
 }
 
 #[tokio::test]
+async fn outbox_schema_exposes_bounded_retry_and_terminal_evidence() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let pool = test.database.pool();
+
+    let terminal_columns: Vec<(String, String, String, Option<i32>)> = sqlx::query_as(
+        "select column_name, data_type, is_nullable, character_maximum_length::integer \
+         from information_schema.columns \
+         where table_schema = 'threads_archive' and table_name = 'outbox_events' \
+           and column_name = any($1) order by column_name",
+    )
+    .bind(vec!["dead_lettered_at", "last_error"])
+    .fetch_all(pool)
+    .await
+    .expect("the outbox terminal-column query must answer");
+    assert_eq!(
+        terminal_columns,
+        vec![
+            (
+                "dead_lettered_at".to_owned(),
+                "timestamp with time zone".to_owned(),
+                "YES".to_owned(),
+                None,
+            ),
+            (
+                "last_error".to_owned(),
+                "character varying".to_owned(),
+                "YES".to_owned(),
+                Some(64),
+            ),
+        ],
+        "outbox terminal evidence must be nullable and last_error must be bounded"
+    );
+
+    let negative_attempt = sqlx::query(
+        "insert into threads_archive.outbox_events \
+         (event_id, event_type, aggregate_type, aggregate_id, payload, occurred_at, attempt_count) \
+         values ($1, 'social.source.captured.v1', 'capture', $2, '{}'::jsonb, now(), -1)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(Uuid::now_v7())
+    .execute(pool)
+    .await
+    .expect_err("a negative attempt count must be refused");
+    assert!(
+        negative_attempt
+            .to_string()
+            .contains("outbox_events_attempt_count_check"),
+        "the named attempt CHECK must reject the row: {negative_attempt}"
+    );
+
+    let conflicting_terminal_state = sqlx::query(
+        "insert into threads_archive.outbox_events \
+         (event_id, event_type, aggregate_type, aggregate_id, payload, occurred_at, \
+          published_at, dead_lettered_at) \
+         values ($1, 'social.source.captured.v1', 'capture', $2, '{}'::jsonb, now(), now(), now())",
+    )
+    .bind(Uuid::now_v7())
+    .bind(Uuid::now_v7())
+    .execute(pool)
+    .await
+    .expect_err("a row cannot be published and dead-lettered");
+    assert!(
+        conflicting_terminal_state
+            .to_string()
+            .contains("outbox_events_terminal_state_check"),
+        "the named terminal-state CHECK must reject the row: {conflicting_terminal_state}"
+    );
+
+    test.cleanup().await.expect("cleanup must drop");
+}
+
+#[tokio::test]
 async fn second_apply_is_a_no_op_and_concurrent_applies_both_succeed() {
     let test = TestDatabase::create_raw()
         .await

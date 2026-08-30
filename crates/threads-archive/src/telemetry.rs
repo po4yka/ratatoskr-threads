@@ -77,7 +77,70 @@ pub const fn lifecycle_metric_descriptors() -> &'static [LifecycleMetricDescript
             name: "threads_export_reprocessing_duration_seconds",
             labels: &["mode", "outcome"],
         },
+        LifecycleMetricDescriptor {
+            name: "threads_outbox_pending",
+            labels: &[],
+        },
+        LifecycleMetricDescriptor {
+            name: "threads_outbox_failed_total",
+            labels: &["failure_class", "terminal"],
+        },
+        LifecycleMetricDescriptor {
+            name: "threads_outbox_redelivered_total",
+            labels: &[],
+        },
+        LifecycleMetricDescriptor {
+            name: "threads_outbox_dead_lettered",
+            labels: &[],
+        },
     ]
+}
+
+/// Closed, content-free outbox failure classes used in durable evidence and telemetry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutboxFailureClass {
+    /// The stored event type has no permitted Threads publication subject.
+    UnsupportedEventType,
+    /// The stored envelope cannot be encoded as wire JSON.
+    PayloadEncodingFailed,
+    /// The stored envelope identity or type disagrees with its row.
+    InvalidOutboxEnvelope,
+    /// The broker did not acknowledge the publication.
+    BrokerUnacknowledged,
+}
+
+impl OutboxFailureClass {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnsupportedEventType => "unsupported_event_type",
+            Self::PayloadEncodingFailed => "payload_encoding_failed",
+            Self::InvalidOutboxEnvelope => "invalid_outbox_envelope",
+            Self::BrokerUnacknowledged => "broker_unacknowledged",
+        }
+    }
+}
+
+/// Records one failed outbox outcome using only closed, content-free labels.
+pub(crate) fn record_outbox_failure(failure_class: OutboxFailureClass, terminal: bool) {
+    let failure_class = failure_class.as_str();
+    counter!(
+        "threads_outbox_failed_total",
+        "failure_class" => failure_class,
+        "terminal" => if terminal { "true" } else { "false" },
+    )
+    .increment(1);
+    tracing::warn!(failure_class, terminal, "Threads outbox publication failed");
+}
+
+/// Records an acknowledged event that succeeded after at least one failed attempt.
+pub(crate) fn record_outbox_redelivery() {
+    counter!("threads_outbox_redelivered_total").increment(1);
+}
+
+/// Updates the process view of retained pending and terminal outbox rows.
+pub(crate) fn record_outbox_depth(pending: i64, dead_lettered: i64) {
+    gauge!("threads_outbox_pending").set(u32::try_from(pending).unwrap_or(u32::MAX));
+    gauge!("threads_outbox_dead_lettered").set(u32::try_from(dead_lettered).unwrap_or(u32::MAX));
 }
 
 /// Closed lifecycle operation vocabulary used as metric label values.
@@ -255,6 +318,17 @@ pub fn init_telemetry(config: &TelemetryConfig) -> Result<TelemetryGuard, Teleme
 pub fn render_startup_record() -> String {
     let buffer = RecordBuffer(Arc::new(Mutex::new(Vec::new())));
     emit_startup_record(json_subscriber(EnvFilter::new("info"), buffer.clone()));
+    buffer.snapshot()
+}
+
+/// Renders the production outbox failure record for privacy contract tests.
+#[must_use]
+pub fn render_outbox_failure_record() -> String {
+    let buffer = RecordBuffer(Arc::new(Mutex::new(Vec::new())));
+    let subscriber = json_subscriber(EnvFilter::new("warn"), buffer.clone());
+    tracing::subscriber::with_default(subscriber, || {
+        record_outbox_failure(OutboxFailureClass::BrokerUnacknowledged, false);
+    });
     buffer.snapshot()
 }
 

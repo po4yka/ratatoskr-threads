@@ -97,3 +97,68 @@ fn lifecycle_metrics_cover_bounded_outcomes_without_sensitive_labels() {
         );
     }
 }
+
+#[test]
+fn outbox_metrics_cover_pending_failed_redelivered_and_dead_lettered_without_sensitive_labels() {
+    let descriptors = telemetry::lifecycle_metric_descriptors();
+    let names = descriptors
+        .iter()
+        .map(|descriptor| descriptor.name)
+        .collect::<std::collections::BTreeSet<_>>();
+    let required = [
+        "threads_outbox_dead_lettered",
+        "threads_outbox_failed_total",
+        "threads_outbox_pending",
+        "threads_outbox_redelivered_total",
+    ];
+    let missing = required
+        .into_iter()
+        .filter(|name| !names.contains(name))
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "outbox metrics are missing: {missing:?}"
+    );
+
+    let prohibited = [
+        "event_id",
+        "payload",
+        "url",
+        "post_text",
+        "credential",
+        "raw_error",
+    ];
+    for descriptor in descriptors
+        .iter()
+        .filter(|descriptor| descriptor.name.starts_with("threads_outbox_"))
+    {
+        assert!(
+            descriptor
+                .labels
+                .iter()
+                .all(|label| !prohibited.contains(label)),
+            "{} exposes a prohibited label in {:?}",
+            descriptor.name,
+            descriptor.labels
+        );
+    }
+
+    let failure_record = telemetry::render_outbox_failure_record();
+    let parsed: serde_json::Value = serde_json::from_str(&failure_record)
+        .expect("the outbox failure record must parse as JSON");
+    assert_eq!(parsed["fields"]["failure_class"], "broker_unacknowledged");
+    assert_eq!(parsed["fields"]["terminal"], false);
+    for sensitive_fragment in [
+        "event_id",
+        "payload",
+        "http://",
+        "post_text",
+        "credential",
+        "raw broker detail",
+    ] {
+        assert!(
+            !failure_record.contains(sensitive_fragment),
+            "failure log exposes prohibited content: {sensitive_fragment}"
+        );
+    }
+}

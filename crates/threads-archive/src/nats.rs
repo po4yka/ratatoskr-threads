@@ -9,10 +9,14 @@ use std::time::Duration;
 
 use async_nats::jetstream;
 use futures_util::StreamExt as _;
+use ratatoskr_event_envelope::EventEnvelope;
 use sqlx::PgPool;
 
 use crate::browser_capture_command::BrowserCaptureCommand;
 use crate::browser_capture_inbox::BrowserCaptureInbox;
+use crate::telemetry::{
+    OutboxFailureClass, record_outbox_depth, record_outbox_failure, record_outbox_redelivery,
+};
 use crate::{Database, PersistenceError};
 
 /// The fleet-owned command stream declared by Platform.
@@ -25,7 +29,10 @@ const OUTBOX_BATCH_SIZE: i64 = 32;
 const OUTBOX_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const OPERATION_REPORT_SUBJECT: &str = "evt.platform.operation.reported.v1";
 const SOCIAL_CAPTURED_SUBJECT: &str = "evt.social.source.captured.v1";
+const SOCIAL_REMOVED_SUBJECT: &str = "evt.social.source.removed.v1";
 const SOCIAL_UPDATED_SUBJECT: &str = "evt.social.source.updated.v1";
+const MAX_OUTBOX_ATTEMPTS: i32 = 12;
+const MAX_RETRY_DELAY_SECONDS: i32 = 300;
 
 /// A connected NATS client retained beside its `JetStream` context.
 #[derive(Debug, Clone)]
@@ -96,6 +103,208 @@ pub enum NatsError {
     /// An outbox row requested a subject outside this service's NATS grant.
     #[error("the outbox event type is not permitted for Threads publication")]
     UnexpectedOutboxEventType,
+    /// The stored envelope identity or type disagrees with its outbox row.
+    #[error("the stored outbox envelope does not match its row identity")]
+    InvalidOutboxEnvelope,
+}
+
+/// One stored outbox envelope ready for an acknowledged transport boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutboxPublication {
+    event_id: uuid::Uuid,
+    payload: Vec<u8>,
+    subject: &'static str,
+}
+
+impl OutboxPublication {
+    /// The stable at-least-once message identity used as `Nats-Msg-Id`.
+    #[must_use]
+    pub fn event_id(&self) -> uuid::Uuid {
+        self.event_id
+    }
+
+    /// The serialized envelope loaded from the outbox row.
+    #[must_use]
+    pub fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
+    /// The closed NATS subject selected from the stored event type.
+    #[must_use]
+    pub fn subject(&self) -> &'static str {
+        self.subject
+    }
+}
+
+/// A transport that completes only after the broker acknowledges a publication.
+pub trait OutboxTransport {
+    /// Publish one stored envelope and await its acknowledgement.
+    fn publish(
+        &mut self,
+        publication: OutboxPublication,
+    ) -> impl Future<Output = Result<(), NatsError>> + Send;
+}
+
+/// Processes one bounded outbox pass through a controllable acknowledged transport.
+///
+/// # Errors
+///
+/// Returns [`NatsError`] when outbox persistence cannot record a truthful result.
+pub async fn publish_outbox_pass<T>(transport: &mut T, pool: &PgPool) -> Result<(), NatsError>
+where
+    T: OutboxTransport,
+{
+    let rows: Vec<(uuid::Uuid, String, serde_json::Value, i32)> = sqlx::query_as(
+        "select event_id, event_type, payload, attempt_count \
+         from threads_archive.outbox_events \
+         where published_at is null and dead_lettered_at is null \
+           and coalesce(next_attempt_at, occurred_at) <= now() \
+         order by coalesce(next_attempt_at, occurred_at), occurred_at, event_id limit $1",
+    )
+    .bind(OUTBOX_BATCH_SIZE)
+    .fetch_all(pool)
+    .await
+    .map_err(PersistenceError::Query)?;
+    for (event_id, event_type, payload, attempt_count) in rows {
+        let Some(subject) = outbox_subject(&event_type) else {
+            mark_terminal_failure(pool, event_id, OutboxFailureClass::UnsupportedEventType).await?;
+            record_outbox_failure(OutboxFailureClass::UnsupportedEventType, true);
+            continue;
+        };
+        let Ok(payload) = serde_json::to_vec(&payload) else {
+            mark_terminal_failure(pool, event_id, OutboxFailureClass::PayloadEncodingFailed)
+                .await?;
+            record_outbox_failure(OutboxFailureClass::PayloadEncodingFailed, true);
+            continue;
+        };
+        let Ok(envelope) = EventEnvelope::from_json(&payload) else {
+            mark_terminal_failure(pool, event_id, OutboxFailureClass::InvalidOutboxEnvelope)
+                .await?;
+            record_outbox_failure(OutboxFailureClass::InvalidOutboxEnvelope, true);
+            continue;
+        };
+        if envelope.event_id.0 != event_id || envelope.event_type.to_wire() != event_type {
+            mark_terminal_failure(pool, event_id, OutboxFailureClass::InvalidOutboxEnvelope)
+                .await?;
+            record_outbox_failure(OutboxFailureClass::InvalidOutboxEnvelope, true);
+            continue;
+        }
+        if transport
+            .publish(OutboxPublication {
+                event_id,
+                payload,
+                subject,
+            })
+            .await
+            .is_err()
+        {
+            let terminal = mark_transport_failure(pool, event_id, attempt_count).await?;
+            record_outbox_failure(OutboxFailureClass::BrokerUnacknowledged, terminal);
+            continue;
+        }
+        sqlx::query(
+            "update threads_archive.outbox_events \
+             set published_at = now(), next_attempt_at = null, last_error = null \
+             where event_id = $1 and published_at is null and dead_lettered_at is null",
+        )
+        .bind(event_id)
+        .execute(pool)
+        .await
+        .map_err(PersistenceError::Query)?;
+        if attempt_count > 0 {
+            record_outbox_redelivery();
+        }
+    }
+    observe_outbox_depth(pool).await?;
+    Ok(())
+}
+
+async fn mark_transport_failure(
+    pool: &PgPool,
+    event_id: uuid::Uuid,
+    previous_attempt_count: i32,
+) -> Result<bool, NatsError> {
+    let attempt_count = previous_attempt_count + 1;
+    let terminal = attempt_count >= MAX_OUTBOX_ATTEMPTS;
+    let retry_delay_seconds = retry_delay_seconds(attempt_count);
+    sqlx::query(
+        "update threads_archive.outbox_events \
+         set attempt_count = $2, \
+             next_attempt_at = case when $3 then null \
+                                    else now() + ($4::integer * interval '1 second') end, \
+             dead_lettered_at = case when $3 then now() else null end, \
+             last_error = $5 \
+         where event_id = $1 and published_at is null and dead_lettered_at is null",
+    )
+    .bind(event_id)
+    .bind(attempt_count)
+    .bind(terminal)
+    .bind(retry_delay_seconds)
+    .bind(OutboxFailureClass::BrokerUnacknowledged.as_str())
+    .execute(pool)
+    .await
+    .map_err(PersistenceError::Query)?;
+    Ok(terminal)
+}
+
+fn retry_delay_seconds(attempt_count: i32) -> i32 {
+    let exponent = u32::try_from(attempt_count.saturating_sub(1)).unwrap_or(u32::MAX);
+    2_i32
+        .checked_pow(exponent)
+        .unwrap_or(MAX_RETRY_DELAY_SECONDS)
+        .min(MAX_RETRY_DELAY_SECONDS)
+}
+
+async fn mark_terminal_failure(
+    pool: &PgPool,
+    event_id: uuid::Uuid,
+    failure_class: OutboxFailureClass,
+) -> Result<(), NatsError> {
+    sqlx::query(
+        "update threads_archive.outbox_events \
+         set attempt_count = attempt_count + 1, dead_lettered_at = now(), \
+             next_attempt_at = null, last_error = $2 \
+         where event_id = $1 and published_at is null and dead_lettered_at is null",
+    )
+    .bind(event_id)
+    .bind(failure_class.as_str())
+    .execute(pool)
+    .await
+    .map_err(PersistenceError::Query)?;
+    Ok(())
+}
+
+async fn observe_outbox_depth(pool: &PgPool) -> Result<(), NatsError> {
+    let (pending, dead_lettered): (i64, i64) = sqlx::query_as(
+        "select count(*) filter (where published_at is null and dead_lettered_at is null), \
+                count(*) filter (where dead_lettered_at is not null) \
+         from threads_archive.outbox_events",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(PersistenceError::Query)?;
+    record_outbox_depth(pending, dead_lettered);
+    Ok(())
+}
+
+struct JetStreamOutboxTransport<'a> {
+    context: &'a jetstream::Context,
+}
+
+impl OutboxTransport for JetStreamOutboxTransport<'_> {
+    async fn publish(&mut self, publication: OutboxPublication) -> Result<(), NatsError> {
+        let mut headers = async_nats::HeaderMap::new();
+        headers.insert("Nats-Msg-Id", publication.event_id.to_string());
+        let acknowledgement = self
+            .context
+            .publish_with_headers(publication.subject, headers, publication.payload.into())
+            .await
+            .map_err(|error| NatsError::Bus(error.to_string()))?;
+        acknowledgement
+            .await
+            .map_err(|error| NatsError::Bus(error.to_string()))?;
+        Ok(())
+    }
 }
 
 /// Runs the durable Threads command consumer until `stop` resolves.
@@ -211,46 +420,15 @@ fn validate_preprovisioned_consumer(
 }
 
 async fn flush_outbox(context: &jetstream::Context, pool: &PgPool) -> Result<(), NatsError> {
-    let rows: Vec<(uuid::Uuid, String, serde_json::Value)> = sqlx::query_as(
-        "select event_id, event_type, payload from threads_archive.outbox_events \
-         where published_at is null order by occurred_at, event_id limit $1",
-    )
-    .bind(OUTBOX_BATCH_SIZE)
-    .fetch_all(pool)
-    .await
-    .map_err(PersistenceError::Query)?;
-    for (event_id, event_type, payload) in rows {
-        let subject = outbox_subject(&event_type).ok_or(NatsError::UnexpectedOutboxEventType)?;
-        let mut headers = async_nats::HeaderMap::new();
-        headers.insert("Nats-Msg-Id", event_id.to_string());
-        let acknowledgement = context
-            .publish_with_headers(
-                subject,
-                headers,
-                serde_json::to_vec(&payload)
-                    .map_err(|error| NatsError::Bus(error.to_string()))?
-                    .into(),
-            )
-            .await
-            .map_err(|error| NatsError::Bus(error.to_string()))?;
-        acknowledgement
-            .await
-            .map_err(|error| NatsError::Bus(error.to_string()))?;
-        sqlx::query(
-            "update threads_archive.outbox_events set published_at = now() where event_id = $1",
-        )
-        .bind(event_id)
-        .execute(pool)
-        .await
-        .map_err(PersistenceError::Query)?;
-    }
-    Ok(())
+    let mut transport = JetStreamOutboxTransport { context };
+    publish_outbox_pass(&mut transport, pool).await
 }
 
 fn outbox_subject(event_type: &str) -> Option<&'static str> {
     match event_type {
         "platform.operation.reported.v1" => Some(OPERATION_REPORT_SUBJECT),
         "social.source.captured.v1" => Some(SOCIAL_CAPTURED_SUBJECT),
+        "social.source.removed.v1" => Some(SOCIAL_REMOVED_SUBJECT),
         "social.source.updated.v1" => Some(SOCIAL_UPDATED_SUBJECT),
         _ => None,
     }
@@ -287,7 +465,10 @@ mod tests {
             outbox_subject("social.source.updated.v1"),
             Some("evt.social.source.updated.v1")
         );
-        assert_eq!(outbox_subject("social.source.removed.v1"), None);
+        assert_eq!(
+            outbox_subject("social.source.removed.v1"),
+            Some("evt.social.source.removed.v1")
+        );
     }
 
     #[test]

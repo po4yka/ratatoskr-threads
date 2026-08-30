@@ -539,16 +539,24 @@ create table threads_archive.outbox_events (
     published_at    timestamptz,
     attempt_count   integer     not null default 0,
     next_attempt_at timestamptz,
+    dead_lettered_at timestamptz,
+    last_error      varchar(64),
     constraint outbox_events_aggregate_type_check
-        check (aggregate_type in ('capture', 'post', 'account', 'export_run'))
+        check (aggregate_type in ('capture', 'post', 'account', 'export_run')),
+    constraint outbox_events_attempt_count_check check (attempt_count >= 0),
+    constraint outbox_events_last_error_check
+        check (last_error is null or length(last_error) between 1 and 64),
+    constraint outbox_events_terminal_state_check
+        check (not (published_at is not null and dead_lettered_at is not null))
 );
 
 comment on table threads_archive.outbox_events is
     'Transactional outbox. Rows become at-least-once publications; replay converges.';
 
-create index outbox_events_unpublished_idx
-    on threads_archive.outbox_events (next_attempt_at)
-    where published_at is null;
+create index outbox_events_due_pending_idx
+    on threads_archive.outbox_events
+        ((coalesce(next_attempt_at, occurred_at)), occurred_at, event_id)
+    where published_at is null and dead_lettered_at is null;
 
 -- ---------------------------------------------------------------------------------------------
 -- inbox_events
