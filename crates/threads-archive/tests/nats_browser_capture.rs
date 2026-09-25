@@ -41,7 +41,7 @@ fn command() -> CommandEnvelope {
         },
         original_permalink: PostPermalink::parse("https://www.threads.net/@author/post/AbCd1")
             .expect("a permalink"),
-        captured_at: WireTimestamp::now(),
+        captured_at: WireTimestamp::now(), // wall-clock: opaque fixture value, unused by any assertion in this file
         provider: SocialCaptureProvider::Threads,
         acquisition: AcquisitionMethod::BrowserExtension,
         saved_authority: SavedAuthority::ExplicitUserCapture,
@@ -52,7 +52,7 @@ fn command() -> CommandEnvelope {
     CommandEnvelope {
         command_id: CommandId(Uuid::now_v7()),
         command_type: SocialCaptureRequested::command_type(),
-        issued_at: WireTimestamp::now(),
+        issued_at: WireTimestamp::now(), // wall-clock: opaque fixture value, unused by any assertion in this file
         producer: ProducerName::parse("ratatoskr-platform").expect("a producer"),
         aggregate_id: operation.clone(),
         correlation_id: operation,

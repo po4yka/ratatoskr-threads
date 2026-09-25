@@ -25,19 +25,19 @@ ratatoskr-identifiers         = { git = "https://github.com/po4yka/ratatoskr-con
 ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-contracts.git", rev = "f0dc35f" }
 
 # ---- async runtime and HTTP ----
-tokio      = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
-axum       = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
-async-nats    = "=0.50.0"
-futures-util = "=0.3.34"
-tower      = { version = "=0.5.3", features = ["util"] }
-http-body-util = "=0.1.5"
-reqwest    = { version = "=0.12.28", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+tokio      = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
+axum       = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+async-nats    = "0.50.0"
+futures-util = "0.3.34"
+tower      = { version = "0.5.3", features = ["util"] }
+http-body-util = "0.1.5"
+reqwest    = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls-native-roots"] }
 
 # ---- persistence ----
 # No `migrate` feature: the schema is one file, `include_str!`d into the binary by
 # `ratatoskr-threads-archive`, so a deployment cannot drift from its schema and there is no
 # ledger to record.
-sqlx = { version = "=0.8.6", default-features = false, features = [
+sqlx = { version = "0.8.6", default-features = false, features = [
     "runtime-tokio",
     "tls-rustls-ring",
     "postgres",
@@ -46,33 +46,33 @@ sqlx = { version = "=0.8.6", default-features = false, features = [
 ] }
 
 # ---- configuration and secrets ----
-secrecy = "=0.10.3"
+secrecy = "0.10.3"
 # Fleet OAuth envelope: AES-256-GCM with explicit key generation and fresh nonces.
-aes-gcm = { version = "=0.11.1", default-features = false, features = ["aes", "alloc"] }
-getrandom = "=0.4.3"
+aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "alloc"] }
+getrandom = "0.4.3"
 
 # ---- telemetry ----
-tracing                     = "=0.1.44"
-tracing-subscriber          = { version = "=0.3.23", default-features = false, features = ["std", "registry", "env-filter", "fmt", "json"] }
-metrics                     = "=0.24.6"
-metrics-exporter-prometheus = { version = "=0.18.3", default-features = false }
+tracing                     = "0.1.44"
+tracing-subscriber          = { version = "0.3.23", default-features = false, features = ["std", "registry", "env-filter", "fmt", "json"] }
+metrics                     = "0.24.6"
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 
 # ---- time ----
 # `clock` + `std` only: `timestamptz` maps to `DateTime<Utc>` through sqlx's
 # `chrono` feature; later OAuth expiry work reuses the same mapping.
-chrono = { version = "=0.4.45", default-features = false, features = ["clock", "std"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 
 # ---- identifiers ----
 # `v7` because ratatoskr-contracts mints UUIDv7 for internally minted identity, and the database
 # stores the same bytes; schema.sql deliberately carries no id DEFAULT that could produce v4.
-uuid = { version = "=1.24.1", features = ["v5", "v7"] }
+uuid = { version = "1.24.1", features = ["v5", "v7"] }
 
 # ---- serialization and errors ----
-serde      = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.151"
-thiserror  = "=2.0.20"
-sha2       = "=0.10.9"
-zip        = { version = "=8.6.0", default-features = false, features = ["deflate"] }
+serde      = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror  = "2.0.20"
+sha2       = "0.10.9"
+zip        = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]
 unsafe_code                   = "forbid"

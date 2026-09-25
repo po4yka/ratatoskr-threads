@@ -1,6 +1,6 @@
 //! Budgeted and privacy-safe public re-resolution job tests.
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use ratatoskr_threads_archive::re_resolution::{
     PriorResolutionState, ReResolutionAttemptOutcome, ReResolutionBudget, ReResolutionCandidate,
     ReResolutionSelection, ReResolutionSkipReason, RefreshAccounting, RefreshClassification,
@@ -9,9 +9,21 @@ use ratatoskr_threads_archive::re_resolution::{
 use ratatoskr_threads_archive::test_support::TestDatabase;
 use uuid::Uuid;
 
+/// A fixed anchor instant. Every use below is a relative offset from this value (due times,
+/// deadlines, budgets), so the anchor itself never needs to be real time.
+#[expect(
+    clippy::expect_used,
+    reason = "a fixed literal invalidates the test source rather than exercising production behavior"
+)]
+fn fixed_now() -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+        .expect("fixed RFC3339 instant")
+        .with_timezone(&Utc)
+}
+
 #[test]
 fn selection_admits_only_due_live_transient_or_resolved_captures() {
-    let now = Utc::now();
+    let now = fixed_now();
     let resolved = Uuid::from_u128(1);
     let transient = Uuid::from_u128(2);
     let failed = Uuid::from_u128(3);
@@ -95,7 +107,7 @@ fn available_budget(now: chrono::DateTime<Utc>) -> ReResolutionBudget {
 
 #[test]
 fn request_never_starts_when_any_run_or_provider_budget_guard_is_exhausted() {
-    let now = Utc::now();
+    let now = fixed_now();
     let cases = [
         (
             ReResolutionSkipReason::ItemBudget,
@@ -191,7 +203,7 @@ async fn deletion_between_selection_and_claim_prevents_request_and_resurrection(
         .execute(test.database.pool())
         .await
         .expect("privacy deletion wins race");
-    let now = Utc::now();
+    let now = fixed_now();
     let mut budget = available_budget(now);
     let before = budget;
     let mut resolver_calls = 0_u32;

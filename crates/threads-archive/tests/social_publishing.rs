@@ -98,7 +98,7 @@ async fn matching_knowledge_completion_links_once_to_the_exact_source_revision()
         owner: captured.source.owner,
         social_source_id: captured.source.social_source_id,
         content_digest: captured.source.content_digest.clone(),
-        completed_at: WireTimestamp::now(),
+        completed_at: WireTimestamp::now(), // wall-clock: opaque fixture value, stored but never compared to a calendar value
         extensions: Extensions::default(),
     };
     let store = KnowledgeCompletionStore::new(&database.database);
@@ -234,7 +234,7 @@ async fn foreign_or_stale_knowledge_completion_does_not_link() {
         owner: original.source.owner,
         social_source_id: original.source.social_source_id,
         content_digest: original.source.content_digest.clone(),
-        completed_at: WireTimestamp::now(),
+        completed_at: WireTimestamp::now(), // wall-clock: opaque fixture value, stored but never compared to a calendar value
         extensions: Extensions::default(),
     };
     let foreign_owner = SocialSourceAnalysisCompleted {
@@ -347,7 +347,7 @@ async fn late_knowledge_completion_cannot_resurrect_a_locally_removed_source() {
             algorithm: ratatoskr_identifiers::DigestAlgorithm::Sha256,
             hex: ratatoskr_identifiers::DigestHex::parse(&digest).expect("fixture digest parses"),
         },
-        completed_at: WireTimestamp::now(),
+        completed_at: WireTimestamp::now(), // wall-clock: opaque fixture value, stored but never compared to a calendar value
         extensions: Extensions::default(),
     };
     let event_id = Uuid::now_v7();

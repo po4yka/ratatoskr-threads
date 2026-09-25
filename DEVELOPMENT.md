@@ -40,7 +40,6 @@ keeps checking its invariants now that a manifest exists.
 
 ```bash
 cargo fetch --locked
-cargo deny --locked check
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo build --workspace --locked
@@ -48,6 +47,9 @@ cargo test --workspace --locked
 cargo test --workspace --locked --doc
 cargo build --workspace --locked --release
 ```
+
+`cargo deny --locked check` runs in its own `deny` job in `.github/workflows/ci.yml`, separate from
+the gate above, so a new RustSec advisory cannot hide a clippy or test failure behind it.
 
 `.github/workflows/ci.yml` runs this list against PostgreSQL 17 (service container in CI,
 `compose.yaml` on a laptop: user/password/database `threads`, published on `127.0.0.1:5437`) and a
