@@ -161,7 +161,7 @@ fn the_stored_record_pins_explicit_user_capture_regardless_of_lane() {
     ];
     for (method, client) in lanes {
         let request = request_for(method, client, "authority-key", RAW, Some("keep"));
-        let record = CaptureRecord::accepted(&request, Uuid::now_v7(), Utc::now());
+        let record = CaptureRecord::accepted(&request, Uuid::now_v7(), Utc::now()); // wall-clock: opaque captured_at, not asserted by this test
         assert_eq!(
             record.saved_authority,
             SavedAuthority::ExplicitUserCapture,
@@ -482,7 +482,7 @@ async fn submitting_stores_a_row_with_pinned_explicit_provenance() {
     assert_eq!(status, "accepted");
     assert_eq!(
         captured_at.date_naive(),
-        Utc::now().date_naive(),
+        Utc::now().date_naive(), // wall-clock: proves the row was stamped by the database's own now(), the only clock this column ever uses; no injectable clock exists for a value the store deliberately never accepts from the caller
         "captured_at must be stamped by the acceptance clock"
     );
 

@@ -32,7 +32,7 @@ fn browser_command(provider: SocialCaptureProvider) -> CommandEnvelope {
         idempotency_key,
         original_permalink: PostPermalink::parse("https://www.threads.net/@author/post/AbCd1")
             .expect("a permalink"),
-        captured_at: WireTimestamp::now(),
+        captured_at: WireTimestamp::now(), // wall-clock: opaque fixture value, only round-tripped and never compared to a calendar value
         provider,
         acquisition: AcquisitionMethod::BrowserExtension,
         saved_authority: SavedAuthority::ExplicitUserCapture,
@@ -43,7 +43,7 @@ fn browser_command(provider: SocialCaptureProvider) -> CommandEnvelope {
     CommandEnvelope {
         command_id: CommandId(Uuid::now_v7()),
         command_type: SocialCaptureRequested::command_type(),
-        issued_at: WireTimestamp::now(),
+        issued_at: WireTimestamp::now(), // wall-clock: opaque fixture value, unused by any assertion in this file
         producer: ProducerName::parse("ratatoskr-platform").expect("a producer"),
         aggregate_id: aggregate_id.clone(),
         correlation_id: aggregate_id,
