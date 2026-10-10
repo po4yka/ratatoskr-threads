@@ -7,12 +7,13 @@ use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use ratatoskr_threads_archive::test_support::TestDatabase;
+use ratatoskr_threads_archive::test_support::{TestDatabase, nats_url, raw_object_root};
 
 const BIN: &str = env!("CARGO_BIN_EXE_ratatoskr-threads-archive");
 const READY_TIMEOUT: Duration = Duration::from_mins(1);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
-const NATS_URL: &str = "nats://127.0.0.1:5422";
+/// How long the service may take to notice a vanished broker: its reconnect grace plus a probe.
+const BUS_LOSS_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Reserves a free loopback port for the operator listener.
 #[expect(
@@ -39,8 +40,12 @@ fn http_get(port: u16, path: &str) -> Option<(u16, String)> {
     Some((status, response))
 }
 
-#[expect(clippy::expect_used, reason = "boot-test helper; see free_port")]
 async fn spawn_service(database_url: &str, admin_port: u16) -> Child {
+    spawn_service_with_bus(database_url, admin_port, &nats_url()).await
+}
+
+#[expect(clippy::expect_used, reason = "boot-test helper; see free_port")]
+async fn spawn_service_with_bus(database_url: &str, admin_port: u16, bus_url: &str) -> Child {
     ensure_command_stream().await;
     Command::new(BIN)
         .env("RATATOSKR__STORAGE__DATABASE_URL", database_url)
@@ -48,7 +53,11 @@ async fn spawn_service(database_url: &str, admin_port: u16) -> Child {
             "RATATOSKR__ADMIN__LISTEN_ADDRESS",
             format!("127.0.0.1:{admin_port}"),
         )
-        .env("RATATOSKR__BUS__URL", NATS_URL)
+        .env("RATATOSKR__BUS__URL", bus_url)
+        .env(
+            "RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT",
+            raw_object_root(),
+        )
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -60,7 +69,7 @@ async fn spawn_service(database_url: &str, admin_port: u16) -> Child {
     reason = "test fixture: its broker/stream setup is required before service startup"
 )]
 async fn ensure_command_stream() {
-    let client = async_nats::connect(NATS_URL)
+    let client = async_nats::connect(nats_url())
         .await
         .expect("the local NATS test broker is reachable");
     let context = async_nats::jetstream::new(client);
@@ -219,7 +228,11 @@ async fn check_config_exits_0_binding_no_port() {
     let output = Command::new(BIN)
         .arg("check-config")
         .env("RATATOSKR__STORAGE__DATABASE_URL", test_url(test.name()))
-        .env("RATATOSKR__BUS__URL", NATS_URL)
+        .env("RATATOSKR__BUS__URL", nats_url())
+        .env(
+            "RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT",
+            raw_object_root(),
+        )
         .output()
         .expect("check-config runs");
 
@@ -276,4 +289,89 @@ async fn missing_database_url_refuses_startup() {
     );
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// A TCP forwarder in front of the test broker that can be torn down, standing in for a broker
+/// that dies while the service is up.
+struct BrokerProxy {
+    address: std::net::SocketAddr,
+    tasks: tokio::task::JoinSet<()>,
+}
+
+/// Relays one client connection to the upstream broker until either side closes.
+async fn forward(mut inbound: tokio::net::TcpStream, upstream: String) {
+    if let Ok(mut outbound) = tokio::net::TcpStream::connect(&upstream).await {
+        let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+    }
+}
+
+impl BrokerProxy {
+    #[expect(clippy::expect_used, reason = "boot-test helper; see free_port")]
+    async fn start(upstream_url: &str) -> Self {
+        let upstream = upstream_url.trim_start_matches("nats://").to_owned();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback port is free");
+        let address = listener.local_addr().expect("a bound address");
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
+            while let Ok((inbound, _peer)) = listener.accept().await {
+                let upstream = upstream.clone();
+                connections.spawn(forward(inbound, upstream));
+            }
+        });
+        Self { address, tasks }
+    }
+
+    fn url(&self) -> String {
+        format!("nats://{}", self.address)
+    }
+
+    /// Closes the listener and every forwarded connection.
+    async fn kill(mut self) {
+        self.tasks.shutdown().await;
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn bus_worker_exit_flips_readiness_and_exit_code() {
+    let test = TestDatabase::create().await.expect("a prepared database");
+    let url = test_url(test.name());
+    let port = free_port();
+    let proxy = BrokerProxy::start(&nats_url()).await;
+
+    let mut child = spawn_service_with_bus(&url, port, &proxy.url()).await;
+    let deadline = Instant::now() + READY_TIMEOUT;
+    let mut ready = false;
+    while Instant::now() < deadline && !ready {
+        ready = matches!(http_get(port, "/health/ready"), Some((200, _)));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ready, "the service never became ready");
+
+    proxy.kill().await;
+
+    // Readiness must turn false once the bus worker is gone, and the process must then exit
+    // non-zero instead of logging the loss and staying up.
+    let deadline = Instant::now() + BUS_LOSS_TIMEOUT;
+    let mut not_ready = false;
+    while Instant::now() < deadline && !not_ready {
+        not_ready = matches!(http_get(port, "/health/ready"), Some((503, _)));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    if !not_ready {
+        let _ = child.kill();
+    }
+    assert!(not_ready, "readiness stayed 200 after the broker went away");
+
+    let exited = wait_with_timeout(&mut child, SHUTDOWN_TIMEOUT).expect("no spawn error");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        matches!(exited, Some(code) if code != 0),
+        "a service that lost its bus must exit non-zero, got {exited:?}"
+    );
+    test.cleanup().await.expect("cleanup drops");
 }

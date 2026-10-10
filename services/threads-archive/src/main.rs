@@ -11,7 +11,7 @@
 //! Exit codes: `0` clean run; `1` runtime startup failure; `78`
 //! (`EX_CONFIG`) configuration unreadable or invalid.
 
-use std::future::IntoFuture as _;
+use std::future::{Future, IntoFuture as _};
 use std::io::Write as _;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -19,14 +19,17 @@ use std::time::Duration;
 
 use secrecy::ExposeSecret as _;
 
+use ratatoskr_threads_archive::capture_resolution::{CaptureResolver, ResolverPolicy};
 use ratatoskr_threads_archive::data_export_reprocessing::{
     ReprocessClassification, ReprocessInput, ReprocessReport, ReprocessingStore,
     SUPPORTED_REPROCESSING_PARSER,
 };
 use ratatoskr_threads_archive::nats::{self, NatsConnection};
+use ratatoskr_threads_archive::public_resolution::{ApprovedOembedClient, RawObjectStore};
 use ratatoskr_threads_archive::telemetry::SERVICE_NAME;
-use ratatoskr_threads_archive::{Config, Database};
+use ratatoskr_threads_archive::{Config, Database, PublicResolutionConfig};
 use ratatoskr_threads_archive_service::RuntimeState;
+use ratatoskr_threads_archive_service::workers::{self, Worker, WorkerKind};
 use uuid::Uuid;
 
 /// How often the prober copies the database answer into the readiness facts.
@@ -34,6 +37,13 @@ use uuid::Uuid;
 /// Long enough that the probe is not itself load; short enough that a
 /// readiness state is never more than one scrape interval stale.
 const DATABASE_PROBE_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How long a worker may take to stop on an orderly shutdown.
+const WORKER_STOP_GRACE: Duration = Duration::from_secs(5);
+
+/// How long the operator plane keeps answering after a worker returned early, so that a probe or a
+/// scrape observes the failed readiness before the process exits non-zero.
+const FAILURE_LINGER: Duration = Duration::from_secs(2);
 
 fn main() -> ExitCode {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
@@ -384,7 +394,8 @@ async fn tokio_main() -> Result<(), ExitCode> {
         ExitCode::FAILURE
     })?;
 
-    let nats_worker = spawn_nats_consumer(&config.bus, database.clone()).await?;
+    let mut bus = spawn_nats_consumer(&config.bus, database.clone()).await?;
+    let mut resolver = spawn_capture_resolver(&config.public_resolution, database.clone()).await?;
 
     let runtime = Arc::new(RuntimeState::new());
     let listener = tokio::net::TcpListener::bind(config.admin.listen_address)
@@ -401,6 +412,8 @@ async fn tokio_main() -> Result<(), ExitCode> {
     // The first probe happens before readiness flips, so the process never
     // reports itself ready over an unverified dependency.
     let prober = spawn_database_prober(database.clone(), Arc::clone(&runtime));
+    runtime.set_bus_ready(true);
+    runtime.set_resolver_ready(true);
     runtime.mark_startup_complete();
     tracing::info!(admin = %config.admin.listen_address, "startup complete");
 
@@ -411,11 +424,18 @@ async fn tokio_main() -> Result<(), ExitCode> {
         database,
         move || metrics_handle.render(),
         Duration::from_millis(config.limits.shutdown_timeout_ms),
+        async {
+            tokio::select! {
+                kind = bus.exited() => kind,
+                kind = resolver.exited() => kind,
+            }
+        },
     )
     .await;
 
     prober.abort();
-    stop_nats_consumer(nats_worker).await;
+    resolver.stop(WORKER_STOP_GRACE).await;
+    bus.stop(WORKER_STOP_GRACE).await;
 
     match serve_result {
         Ok(()) => {
@@ -423,7 +443,7 @@ async fn tokio_main() -> Result<(), ExitCode> {
             Ok(())
         }
         Err(error) => {
-            tracing::error!(%error, "the operator server failed");
+            tracing::error!(%error, "the service stopped abnormally");
             Err(ExitCode::FAILURE)
         }
     }
@@ -432,13 +452,7 @@ async fn tokio_main() -> Result<(), ExitCode> {
 async fn spawn_nats_consumer(
     bus: &ratatoskr_threads_archive::BusConfig,
     database: Database,
-) -> Result<
-    (
-        tokio::sync::oneshot::Sender<()>,
-        tokio::task::JoinHandle<()>,
-    ),
-    ExitCode,
-> {
+) -> Result<Worker, ExitCode> {
     let connection = match bus.nkey_seed_path.as_deref() {
         Some(seed_path) => NatsConnection::connect_with_nkey(&bus.url, seed_path).await,
         None => NatsConnection::connect(&bus.url).await,
@@ -453,41 +467,58 @@ async fn spawn_nats_consumer(
             tracing::error!(%error, "the NATS command consumer is not deployable");
             ExitCode::FAILURE
         })?;
-    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
-    let worker = tokio::spawn(async move {
-        if let Err(error) = nats::run(&connection, &database, async move {
-            let _ignored = stop_rx.await;
-        })
-        .await
-        {
-            tracing::error!(%error, "the NATS command consumer stopped");
-        }
-    });
-    Ok((stop_tx, worker))
+    Ok(workers::spawn(WorkerKind::Bus, move |stop| async move {
+        nats::run(&connection, &database, stop).await
+    }))
 }
 
-async fn stop_nats_consumer(
-    worker: (
-        tokio::sync::oneshot::Sender<()>,
-        tokio::task::JoinHandle<()>,
-    ),
-) {
-    let (stop, task) = worker;
-    let _ignored = stop.send(());
-    if tokio::time::timeout(Duration::from_secs(5), task)
-        .await
-        .is_err()
-    {
-        tracing::warn!("the NATS command consumer did not stop within five seconds");
-    }
+/// Starts the capture resolver that completes accepted captures.
+///
+/// The configuration guarantees the raw evidence root whenever the bus is configured, so a missing
+/// one here is a refusal to start rather than a silent no-op.
+async fn spawn_capture_resolver(
+    config: &PublicResolutionConfig,
+    database: Database,
+) -> Result<Worker, ExitCode> {
+    let Some(root) = config.raw_object_root.clone() else {
+        eprintln!(
+            "{SERVICE_NAME}: refusing to start without RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT"
+        );
+        return Err(ExitCode::FAILURE);
+    };
+    tokio::fs::create_dir_all(&root).await.map_err(|error| {
+        tracing::error!(%error, "the raw evidence directory could not be created");
+        ExitCode::FAILURE
+    })?;
+    let client = ApprovedOembedClient::new(&config.oembed_endpoint).map_err(|error| {
+        tracing::error!(%error, "the public oEmbed client could not be built");
+        ExitCode::FAILURE
+    })?;
+    let resolver = CaptureResolver::new(
+        database,
+        client,
+        RawObjectStore::new(root),
+        ResolverPolicy {
+            max_attempts: config.max_attempts,
+            batch_size: config.batch_size,
+            poll_interval: Duration::from_millis(config.poll_interval_ms),
+        },
+    );
+    Ok(workers::spawn(
+        WorkerKind::Resolver,
+        move |stop| async move { resolver.run(stop).await },
+    ))
 }
 
+/// Serves the operator plane until a shutdown signal, a server failure, or a background worker
+/// returning early; the last of these is an error.
 async fn serve_admin(
     listener: tokio::net::TcpListener,
     runtime: Arc<RuntimeState>,
     database: Database,
     render_metrics: impl Fn() -> String + Send + Sync + 'static,
     shutdown_timeout: Duration,
+    worker_exit: impl Future<Output = WorkerKind>,
 ) -> Result<(), String> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let server = axum::serve(
@@ -516,6 +547,20 @@ async fn serve_admin(
             }
             database.close().await;
             Ok(())
+        }
+        kind = worker_exit => {
+            tracing::error!(worker = %kind, "a background worker returned before shutdown; reporting not ready and exiting");
+            runtime.worker_stopped(kind);
+            // The failed readiness is the signal an operator or load balancer acts on, so keep
+            // answering it for a moment before the process leaves.
+            let still_serving = tokio::time::timeout(FAILURE_LINGER, &mut server).await.is_err();
+            if still_serving {
+                runtime.begin_draining();
+                let _ignored = shutdown_tx.send(());
+                let _ignored = tokio::time::timeout(shutdown_timeout, &mut server).await;
+            }
+            database.close().await;
+            Err(format!("the {kind} worker returned before shutdown"))
         }
     }
 }

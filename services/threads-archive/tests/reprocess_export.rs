@@ -9,12 +9,10 @@
 use ratatoskr_threads_archive::data_export_reprocessing::{
     SUPPORTED_REPROCESSING_EXPORT, SUPPORTED_REPROCESSING_PARSER,
 };
-use ratatoskr_threads_archive::test_support::{TestDatabase, admin_url};
+use ratatoskr_threads_archive::test_support::{TestDatabase, admin_url, nats_url, raw_object_root};
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 use uuid::Uuid;
-
-const NATS_URL: &str = "nats://127.0.0.1:5422";
 
 fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_ratatoskr-threads-archive")
@@ -32,7 +30,11 @@ fn run(arguments: &[String], database_url: Option<&str>) -> Output {
     if let Some(database_url) = database_url {
         command
             .env("RATATOSKR__STORAGE__DATABASE_URL", database_url)
-            .env("RATATOSKR__BUS__URL", NATS_URL);
+            .env("RATATOSKR__BUS__URL", nats_url())
+            .env(
+                "RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT",
+                raw_object_root(),
+            );
     }
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn().expect("service process runs");
@@ -130,7 +132,11 @@ async fn process_contract_separates_json_stdout_diagnostics_and_exit_codes() {
         .args(&base)
         .env_clear()
         .env("RATATOSKR__STORAGE__DATABASE_URL", &database_url)
-        .env("RATATOSKR__BUS__URL", NATS_URL)
+        .env("RATATOSKR__BUS__URL", nats_url())
+        .env(
+            "RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT",
+            raw_object_root(),
+        )
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

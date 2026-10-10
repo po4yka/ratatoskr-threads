@@ -26,27 +26,33 @@ use serde::Serialize;
 
 /// Periodic own-account synchronization scheduling primitives.
 pub mod scheduler;
+/// Supervision of the background workers whose early return is a service fault.
+pub mod workers;
 
-/// No database is configured for this process.
-const DATABASE_ABSENT: u8 = 0;
-/// The last probe answered.
-const DATABASE_UP: u8 = 1;
-/// The last probe did not answer.
-const DATABASE_DOWN: u8 = 2;
+/// The dependency or worker has not reported anything.
+const ABSENT: u8 = 0;
+/// The dependency answered or the worker is running.
+const UP: u8 = 1;
+/// The dependency did not answer or the worker has stopped.
+const DOWN: u8 = 2;
 
 /// The deployable role this process serves, one of one.
 pub const ROLE: &str = "archive";
 
 /// Shared process lifecycle used by readiness computation.
 ///
-/// Readiness itself is startup and drain only; a dependency that flaps must
-/// not flap a process that is still accepting work correctly. What the last
-/// database probe found is REPORTED in the check list instead.
+/// Readiness is startup, drain and the background workers; a dependency that
+/// flaps must not flap a process that is still accepting work correctly, so
+/// what the last database probe found is REPORTED in the check list instead.
+/// A background worker is different: one that has returned cannot come back
+/// without a restart, so its check fails readiness for good.
 #[derive(Debug)]
 pub struct RuntimeState {
     startup_complete: AtomicBool,
     draining: AtomicBool,
     database: AtomicU8,
+    bus: AtomicU8,
+    resolver: AtomicU8,
 }
 
 impl RuntimeState {
@@ -56,7 +62,9 @@ impl RuntimeState {
         Self {
             startup_complete: AtomicBool::new(false),
             draining: AtomicBool::new(false),
-            database: AtomicU8::new(DATABASE_ABSENT),
+            database: AtomicU8::new(ABSENT),
+            bus: AtomicU8::new(ABSENT),
+            resolver: AtomicU8::new(ABSENT),
         }
     }
 
@@ -78,20 +86,40 @@ impl RuntimeState {
     /// open a connection, or a saturated pool would make the health check the
     /// thing that finishes it off.
     pub fn set_database_reachable(&self, reachable: bool) {
-        self.database.store(
-            if reachable {
-                DATABASE_UP
-            } else {
-                DATABASE_DOWN
-            },
-            Ordering::Release,
-        );
+        self.database
+            .store(if reachable { UP } else { DOWN }, Ordering::Release);
+    }
+
+    /// Record whether the NATS worker (command consumer and outbox relay) is running.
+    ///
+    /// Set `true` once the worker is started and `false` as soon as it returns
+    /// before an orderly shutdown; readiness then fails.
+    pub fn set_bus_ready(&self, ready: bool) {
+        self.bus
+            .store(if ready { UP } else { DOWN }, Ordering::Release);
+    }
+
+    /// Record whether the capture resolver is running; see [`Self::set_bus_ready`].
+    pub fn set_resolver_ready(&self, ready: bool) {
+        self.resolver
+            .store(if ready { UP } else { DOWN }, Ordering::Release);
+    }
+
+    /// Record that `kind` returned before an orderly shutdown: readiness fails.
+    pub fn worker_stopped(&self, kind: workers::WorkerKind) {
+        match kind {
+            workers::WorkerKind::Bus => self.set_bus_ready(false),
+            workers::WorkerKind::Resolver => self.set_resolver_ready(false),
+        }
     }
 
     /// Whether new work may be routed to this process.
     #[must_use]
     pub fn is_ready(&self) -> bool {
-        self.startup_complete.load(Ordering::Acquire) && !self.draining.load(Ordering::Acquire)
+        self.startup_complete.load(Ordering::Acquire)
+            && !self.draining.load(Ordering::Acquire)
+            && self.bus.load(Ordering::Acquire) != DOWN
+            && self.resolver.load(Ordering::Acquire) != DOWN
     }
 
     /// The readiness checks, sorted by name so two consecutive bodies are
@@ -117,13 +145,26 @@ impl RuntimeState {
             },
         ];
 
-        if self.database.load(Ordering::Acquire) != DATABASE_ABSENT {
-            let up = self.database.load(Ordering::Acquire) == DATABASE_UP;
+        if self.database.load(Ordering::Acquire) != ABSENT {
+            let up = self.database.load(Ordering::Acquire) == UP;
             checks.push(Check {
                 name: CheckName::Database,
                 state: pass(up),
                 reason: (!up).then_some(CheckReason::DependencyUnavailable),
             });
+        }
+        for (name, worker) in [
+            (CheckName::Bus, &self.bus),
+            (CheckName::Resolver, &self.resolver),
+        ] {
+            let state = worker.load(Ordering::Acquire);
+            if state != ABSENT {
+                checks.push(Check {
+                    name,
+                    state: pass(state == UP),
+                    reason: (state != UP).then_some(CheckReason::WorkerStopped),
+                });
+            }
         }
 
         checks.sort_unstable_by_key(|check| check.name);
@@ -163,10 +204,14 @@ pub struct Check {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum CheckName {
+    /// The NATS worker is running. Present once it was started.
+    Bus,
     /// The database answers. Present only when one is configured.
     Database,
     /// No shutdown signal has arrived.
     Drain,
+    /// The capture resolver is running. Present once it was started.
+    Resolver,
     /// Configuration, telemetry and every configured listener are up.
     Startup,
 }
@@ -193,6 +238,8 @@ pub enum CheckReason {
     ShutdownRequested,
     /// The last probe of the database did not answer.
     DependencyUnavailable,
+    /// A background worker returned before an orderly shutdown.
+    WorkerStopped,
 }
 
 /// The Prometheus text exposition format the `metrics` crate renders.
