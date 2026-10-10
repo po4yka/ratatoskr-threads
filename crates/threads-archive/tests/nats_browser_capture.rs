@@ -262,12 +262,21 @@ async fn removal_row_is_published_and_later_rows_are_not_blocked() {
         vec![removed, captured],
         "the removal fact publishes first and does not stop the later fact"
     );
-    let unpublished: i64 = sqlx::query_scalar(
-        "select count(*) from threads_archive.outbox_events where published_at is null",
-    )
-    .fetch_one(pool)
-    .await
-    .expect("counting unpublished rows");
+    // The relay marks a row published after its PubAck, which can land just after the subscriber
+    // sees the message, so wait for the effect under a deadline rather than reading it once.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let unpublished = loop {
+        let count: i64 = sqlx::query_scalar(
+            "select count(*) from threads_archive.outbox_events where published_at is null",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("counting unpublished rows");
+        if count == 0 || tokio::time::Instant::now() >= deadline {
+            break count;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
     assert_eq!(
         unpublished, 0,
         "both rows are marked published after PubAck"
