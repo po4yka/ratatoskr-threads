@@ -19,6 +19,14 @@ later items: provider fixtures/WireMock and testcontainers.
 `RATATOSKR__BUS__URL` is required. Production supplies an nkey through
 `RATATOSKR__BUS__NKEY_SEED_PATH`; the local unauthenticated NATS test broker may omit it.
 
+With the bus configured the surface that completes its work must be configured too:
+`RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT` (an absolute directory for content-addressed raw
+evidence) is required, and the process refuses to start (exit 78) without it. This is a breaking change
+of XR-021: a bus-only configuration used to boot and now does not. The same change edited
+`schema.sql` in place (`captures.operation_id`, `command_id`, `resolution_attempts`,
+`operation_reported_at`, `outbox_events.last_error` and the `event_type` CHECK); there is no migration,
+so recreate a development database from the current schema.
+
 ## Code size limits
 
 `clippy.toml` beside the root `Cargo.toml` carries the limits: functions at most 100 lines of code, signatures at most 7 arguments, block nesting at most 5 deep, plus `allow-unwrap-in-tests` and the disallowed direct environment reads outside the config module. The numbers are the fresh-tree baseline, not an ambition; an exception is a site-level `#[expect]` with a reason. The gate also enforces the one limit clippy cannot express: no tracked `.rs` file may exceed 850 lines.

@@ -160,6 +160,23 @@ Clients submit a capture through Platform with an idempotency key. Threads then:
 
 A replay of the same capture converges on the same local source record while preserving new notes or collection links according to their owning context.
 
+### Browser captures routed by Platform
+
+A browser-extension capture arrives as a `social.capture.requested.v1` command on `cmd.threads.capture.requested.v1`. The report shapes, the retry schedule and the exactly-once terminal report are defined once for X, Instagram and Threads in the workspace changeset XR-021 (`CONTRACTS.md` section S10, CD1, CD2, CD5, CD7); this is the Threads side of it.
+
+1. Intake commits the inbox marker, the capture (with the Platform operation id, the command id, zero resolution attempts and `next_resolution_at = now()`) and a `capture_queued` operation report in one transaction, then acknowledges the command.
+2. The capture resolver, its own task beside the NATS worker, claims due captures with `FOR UPDATE SKIP LOCKED` under a 120 second lease and resolves each through the credential-free oEmbed client.
+3. A deleted post (HTTP 404 or 410) writes a tombstone, marks the capture `unavailable` and reports `failed` with `social.source.deleted`, not retryable. A forbidden post (403) or an unusable response reports `failed` with `social.source.unavailable`, not retryable.
+4. A transient failure (429, any 5xx, a network error, an oversized response) is stored as a `resolver_failed` resolution row and retried after 30 seconds, 2 minutes, 8 minutes and 30 minutes. The fifth failure reports `failed` with `social.source.unavailable`, retryable, and leaves the capture `accepted`: missing output is never deletion evidence.
+5. A resolved post appends `social.source.captured.v1` (or `updated` when its digest changed) and reports `succeeded` with one `social.post` result naming the stored `social_source:<id>`.
+6. The report and the `operation_reported_at` guard that makes it exactly-once commit in one transaction, so a crash between recording an observation and reporting it only reports on the next pass; a capture that is already terminal is never fetched again.
+
+The outbox relay publishes `platform.operation.reported.v1`, `social.source.captured.v1`, `social.source.updated.v1` and `social.source.removed.v1` to `evt.` plus the event type. `outbox_events.event_type` carries a CHECK listing exactly those four, a failed publication records `attempt_count`, `last_error` and a backoff `next_attempt_at` so one failing row never starves the rows behind it, and an acknowledgement timeout is indistinguishable from a permission denial: check the NATS server log for a `Publish Violation`.
+
+When the NATS worker or the resolver returns before an orderly shutdown the process reports `/health/ready` as 503 (`bus` or `resolver` check) and exits non-zero.
+
+Configuration, all under `RATATOSKR__PUBLIC_RESOLUTION__`: `RAW_OBJECT_ROOT` (required, absolute directory), `OEMBED_ENDPOINT` (default `https://graph.threads.com/oembed`, https only), `MAX_ATTEMPTS` (5), `BATCH_SIZE` (8) and `POLL_INTERVAL_MS` (2000). The oEmbed client carries no credential. If Meta requires an app token for the Threads oEmbed endpoint, the resolver reports every capture as unavailable until the token support that this change leaves out is added.
+
 ## Normalized post representation
 
 The common social projection may include:

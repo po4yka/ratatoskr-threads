@@ -1,0 +1,28 @@
+## Context
+
+See [proposal.md](proposal.md) and XR-021 CONTRACTS.md sections S02, S03 and S10. The Threads service already consumes `cmd.threads.capture.requested.v1`, commits the capture and a queued report in one transaction, and relays its outbox. What is missing is everything after `Queued`.
+
+## Decisions
+
+**Relay.** `outbox_subject` stays a closed `match`. The new `social.source.removed.v1` arm publishes to `evt.social.source.removed.v1`. The `event_type` CHECK on `outbox_events` lists exactly the four types the match accepts, so an unmapped type is unreachable; if the code and the CHECK ever drift, the relay returns `UnexpectedOutboxEventType` and the worker stops (S02 item 2). A publish failure leaves the row unpublished, increments `attempt_count`, stores a safe `last_error` class and sets `next_attempt_at`, and the select honours `next_attempt_at` and orders by `(occurred_at, event_id)`, so one failing head row backs off instead of starving the rest. The flush continues past a failed row within one pass and surfaces the error after the pass so the worker still stops on a persistent bus failure.
+
+**Bus lifecycle.** Every background worker (the NATS worker and the resolver) is started through `workers::spawn`, which gives it a stop signal and a completion signal. The supervising code in `main` selects on the completions next to the shutdown signal; a return before the stop signal calls `RuntimeState::worker_stopped` (so `set_bus_ready(false)` or `set_resolver_ready(false)`), keeps the operator plane answering for two seconds so the 503 is observable, then drains and exits with `ExitCode::FAILURE`. Readiness is computed from startup, drain, and the two worker bits; the database bit stays reporting-only. The NATS worker also treats a broker connection that stays down for five seconds as a fatal condition: an idle consumer would otherwise never notice that the broker is gone.
+
+**Intake.** `captures.operation_id` is the Platform operation id and `captures.command_id` (an addition beyond CD7, needed because the terminal report names the command as its causation and nothing else stores it for a capture); `operation_reported_at` is the idempotency guard of CD2. Intake sets `next_resolution_at = now()` and builds the queued report with `ratatoskr_social_contracts::capture_report::{queued_report, report_envelope}`; the local `queued_report` is deleted.
+
+**Resolver.** `CaptureResolver::run_due_once(now)` claims every unreported operation that is due, whatever the capture status, with `FOR UPDATE SKIP LOCKED` and a 120 s lease (it pushes `next_resolution_at` forward in the claim transaction so a crashed worker's rows become due again). Resolution goes through `ApprovedOembedClient::resolve_and_record`. Failures are classified by the pure `classify(&PublicResolutionError) -> Resolution`. Deleted and inaccessible terminate immediately through `CaptureStore::record_observation`; every transient failure stores a `resolver_failed` observation (the table is one row per attempt), bumps `resolution_attempts` and sets `next_resolution_at = now + min(30 s * 4^(n-1), 30 min)`, and the fifth transient failure reports `Transient` unavailable. Failures of this service's own storage are not classified at all (`is_local_fault`): they stop the resolver, which the supervisor turns into a failed readiness and a non-zero exit. A terminal report sets `next_resolution_at` to null. The terminal report and `operation_reported_at` are written in one transaction with `WHERE operation_reported_at IS NULL`, so a crash between `record()` and the report only reports on the next run (no second fetch because a resolved capture is not fetched again).
+
+**Preserved identity.** The preserved result names the actual `social_sources.social_source_id` for `(user_ref, post_id)` read after `record()`, through `publishing::social_source_id_for`.
+
+**Injected clock.** `run_due_once(now)` takes the instant; the production loop passes `Utc::now()`. Tests advance it to cross the backoff schedule without sleeping.
+
+**Credentials.** `ApprovedOembedClient` stays credential-free; a test forbids `access_token` in its endpoint. If Meta requires an app token for the Threads oEmbed endpoint that is a follow-up outside this change.
+
+**Deviations from the work order.** (1) `captures_resolution_due_idx` is partial on `operation_id is not null and operation_reported_at is null`, not also on `status = 'accepted'`: a capture that was recorded as resolved or unavailable but not yet reported must be claimed to be reported, which is the crash-recovery rule of CD2. (2) `captures.command_id` is added (above). (3) `ApprovedOembedClient::for_loopback_test` exists only behind the `test-support` feature, so the resolver can be tested over real HTTP against a local fake without loosening the production host allowlist. (4) `RawObjectStore` moved to `public_resolution/raw_object_store.rs` to keep `public_resolution.rs` under the 850-line cap; no behaviour change.
+
+## Risks / Trade-offs
+
+- The refusal to start without `RAW_OBJECT_ROOT` is deliberate (CD2 configuration rule) and is a named break.
+- A deleted-then-recaptured post: a new command with a new idempotency key creates a new capture row; the unavailable capture is not retried.
+- Two operations that share one idempotency key land on one capture row; the first operation id wins and the second stays queued until Platform's stale reaper fails it. Platform derives the key per operation, so this is not expected; Instagram's `capture_operations` table (CD7) is the shape that would remove the limit.
+- A broker connection that is down for more than five seconds ends the NATS worker and so the process; a supervisor restart is the intended recovery.
