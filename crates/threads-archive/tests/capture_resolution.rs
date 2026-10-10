@@ -2,7 +2,7 @@
 
 mod common;
 
-use chrono::{DateTime, Duration, SubsecRound as _, Utc};
+use chrono::{DateTime, Duration, Utc};
 use ratatoskr_threads_archive::browser_capture_command::BrowserCaptureCommand;
 use ratatoskr_threads_archive::browser_capture_inbox::BrowserCaptureInbox;
 use ratatoskr_threads_archive::capture_resolution::{CaptureResolver, ResolverPolicy};
@@ -18,6 +18,20 @@ use uuid::Uuid;
 use common::{PERMALINK, threads_command};
 
 const MAX_ATTEMPTS: u32 = 5;
+
+/// The instant every resolver pass in this file starts from. Delivery stamps `next_resolution_at`
+/// with the database's `now()`, so the anchor must lie after any instant a test run can deliver at;
+/// a fixed far-future literal does that without the test reading the wall clock. Every use below is
+/// a relative offset from it (backoff waits, due times), so it never needs to be real time.
+#[expect(
+    clippy::expect_used,
+    reason = "a fixed literal invalidates the test source rather than exercising production behavior"
+)]
+fn anchor() -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2100-01-01T00:00:00Z")
+        .expect("fixed RFC3339 instant")
+        .with_timezone(&Utc)
+}
 
 struct Harness {
     database: TestDatabase,
@@ -132,7 +146,7 @@ async fn a_public_post_is_preserved_and_reported_exactly_once() {
     let harness = harness(vec![FakeReply::Oembed]).await;
     let pool = harness.pool();
 
-    assert_eq!(run_at(&harness, Utc::now()).await, (1, 1));
+    assert_eq!(run_at(&harness, anchor()).await, (1, 1));
 
     let (status, attempts, _due) = capture_state(pool, harness.capture_id).await;
     assert_eq!((status.as_str(), attempts), ("resolved", 0));
@@ -184,7 +198,7 @@ async fn a_public_post_is_preserved_and_reported_exactly_once() {
     );
 
     assert_eq!(
-        run_at(&harness, Utc::now() + Duration::hours(2)).await,
+        run_at(&harness, anchor() + Duration::hours(2)).await,
         (0, 0)
     );
     assert_eq!(terminal_reports(pool).await.len(), 1);
@@ -201,7 +215,7 @@ async fn a_deleted_post_is_tombstoned_and_reported_as_deleted() {
     let harness = harness(vec![FakeReply::Status(404)]).await;
     let pool = harness.pool();
 
-    assert_eq!(run_at(&harness, Utc::now()).await, (1, 1));
+    assert_eq!(run_at(&harness, anchor()).await, (1, 1));
 
     let (status, _attempts, _due) = capture_state(pool, harness.capture_id).await;
     assert_eq!(status, "unavailable");
@@ -230,7 +244,7 @@ async fn a_deleted_post_is_tombstoned_and_reported_as_deleted() {
         "nothing was preserved, so no fact"
     );
     assert_eq!(
-        run_at(&harness, Utc::now() + Duration::hours(2)).await,
+        run_at(&harness, anchor() + Duration::hours(2)).await,
         (0, 0)
     );
     harness.database.cleanup().await.expect("cleanup");
@@ -241,7 +255,7 @@ async fn a_forbidden_post_is_reported_as_permanently_unavailable() {
     let harness = harness(vec![FakeReply::Status(403)]).await;
     let pool = harness.pool();
 
-    assert_eq!(run_at(&harness, Utc::now()).await, (1, 1));
+    assert_eq!(run_at(&harness, anchor()).await, (1, 1));
 
     let (status, _attempts, _due) = capture_state(pool, harness.capture_id).await;
     assert_eq!(status, "unavailable");
@@ -262,7 +276,7 @@ async fn transient_failures_back_off_on_the_bounded_schedule_then_succeed() {
     let harness = harness(replies).await;
     let pool = harness.pool();
 
-    let mut now = Utc::now().trunc_subsecs(6);
+    let mut now = anchor();
     for (attempt, wait_seconds) in [(1, 30), (2, 120), (3, 480), (4, 1_800)] {
         assert_eq!(
             run_at(&harness, now).await,
@@ -302,7 +316,7 @@ async fn exhausted_transient_failures_end_in_one_retryable_failure() {
     let harness = harness(vec![FakeReply::Status(503)]).await;
     let pool = harness.pool();
 
-    let mut now = Utc::now();
+    let mut now = anchor();
     for attempt in 1..MAX_ATTEMPTS {
         assert_eq!(run_at(&harness, now).await, (1, 0), "attempt {attempt}");
         let (_status, _attempts, due) = capture_state(pool, harness.capture_id).await;
@@ -368,7 +382,7 @@ async fn a_crash_between_recording_and_reporting_only_reports() {
         "the crash left no report"
     );
 
-    assert_eq!(run_at(&harness, Utc::now()).await, (1, 1));
+    assert_eq!(run_at(&harness, anchor()).await, (1, 1));
 
     let terminal = terminal_reports(pool).await;
     assert_eq!(terminal.len(), 1);
@@ -397,7 +411,7 @@ async fn a_resolved_capture_whose_source_is_gone_is_reported_instead_of_stopping
     .await
     .expect("orphaning the resolved capture");
 
-    assert_eq!(run_at(&harness, Utc::now()).await, (1, 1));
+    assert_eq!(run_at(&harness, anchor()).await, (1, 1));
 
     let terminal = terminal_reports(pool).await;
     assert_eq!(terminal.len(), 1, "the operation is not left waiting");
@@ -406,7 +420,7 @@ async fn a_resolved_capture_whose_source_is_gone_is_reported_instead_of_stopping
     assert_eq!(payload["error"]["code"], "social.source.unavailable");
     assert_eq!(payload["error"]["retryable"], false);
     assert_eq!(
-        run_at(&harness, Utc::now() + Duration::hours(2)).await,
+        run_at(&harness, anchor() + Duration::hours(2)).await,
         (0, 0),
         "the poison capture does not come back"
     );
