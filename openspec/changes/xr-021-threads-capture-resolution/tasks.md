@@ -32,6 +32,11 @@
 - [x] 7.1 RED: `crates/threads-archive/tests/nats_browser_capture.rs::command_to_terminal_report_and_source_fact` is red until tasks 2 to 6 land together; it is written and run first against the pre-resolver tree.
 - [x] 7.2 GREEN: passes with the resolver and relay running against the fake oEmbed server and a real broker.
 
-## 8. Documentation and final gate
+## 8. Answer refused commands, settle messages by S02 item 7, and keep the resolver alive on a vanished source
 
-- [x] 8.1 Documentation and gate task, no failing test applies: `README.md`, `DEVELOPMENT.md` (name the breaks: the process refuses to start without `RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT`; `schema.sql` changed in place), `openspec validate --all --strict`, `openspec validate --archived`, and the full DEVELOPMENT.md gate.
+- [x] 8.1 RED: `crates/threads-archive/tests/nats_browser_capture.rs::{rejected_but_attributable_command_gets_one_failed_report, unattributable_commands_are_terminated_without_a_report, a_failing_inbox_write_naks_and_the_command_completes_on_redelivery}` and `crates/threads-archive/tests/capture_resolution.rs::a_resolved_capture_whose_source_is_gone_is_reported_instead_of_stopping_the_resolver`. Fail today: the unsupported-permalink command is acknowledged silently (no report), garbage is acknowledged not terminated, a failed inbox write ends the worker, and the orphaned capture makes `run_due_once` return `MissingSource`.
+- [x] 8.2 GREEN: `BrowserCaptureCommand::intake` and `RejectedCommand`, `BrowserCaptureInbox::reject` (inbox marker `rejected` plus the failed report in one transaction, filed under the operation), `outbox_events.aggregate_type` accepts `operation`, `nats::handle_delivery` settles Ack, Term or Nak(2 s), and the resolver reports a vanished source as `Inaccessible`.
+
+## 9. Documentation and final gate
+
+- [x] 9.1 Documentation and gate task, no failing test applies: `README.md`, `DEVELOPMENT.md` (name the breaks: the process refuses to start without `RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT`; `schema.sql` changed in place), `openspec validate --all --strict`, `openspec validate --archived`, and the full DEVELOPMENT.md gate.

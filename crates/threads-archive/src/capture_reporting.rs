@@ -9,7 +9,16 @@ use uuid::Uuid;
 const OPERATION_REPORT_EVENT: &str = "platform.operation.reported.v1";
 const PRODUCER: &str = "ratatoskr-threads";
 
-/// The capture and the Platform command that one report belongs to.
+/// The entity a report is filed under in the outbox.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ReportAggregate {
+    /// The explicit capture the operation advances.
+    Capture(Uuid),
+    /// The operation itself, for a command rejected before any capture existed.
+    Operation,
+}
+
+/// The operation and the Platform command that one report belongs to.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ReportTarget {
     /// The Ratatoskr user who owns the capture.
@@ -18,8 +27,8 @@ pub(crate) struct ReportTarget {
     pub(crate) operation_id: OperationId,
     /// The Platform command that started the operation.
     pub(crate) command_id: Uuid,
-    /// The capture the operation advances.
-    pub(crate) capture_id: Uuid,
+    /// What the report is filed under.
+    pub(crate) aggregate: ReportAggregate,
 }
 
 /// A report could not be queued.
@@ -47,8 +56,12 @@ pub(crate) async fn append_report(
     report: &OperationReported,
 ) -> Result<(), ReportError> {
     let event_id = Uuid::now_v7();
+    let (aggregate_type, aggregate_id) = match target.aggregate {
+        ReportAggregate::Capture(capture_id) => ("capture", capture_id),
+        ReportAggregate::Operation => ("operation", target.operation_id.0),
+    };
     let aggregate =
-        EntityRef::parse(&format!("capture:{}", target.capture_id)).map_err(construction)?;
+        EntityRef::parse(&format!("{aggregate_type}:{aggregate_id}")).map_err(construction)?;
     let envelope = report_envelope(
         PRODUCER,
         UserId(target.owner),
@@ -63,11 +76,12 @@ pub(crate) async fn append_report(
     sqlx::query(
         "insert into threads_archive.outbox_events \
          (event_id, event_type, aggregate_type, aggregate_id, payload, correlation_id, causation_id, occurred_at) \
-         values ($1, $2, 'capture', $3, $4, $5, $6, now())",
+         values ($1, $2, $3, $4, $5, $6, $7, now())",
     )
     .bind(event_id)
     .bind(OPERATION_REPORT_EVENT)
-    .bind(target.capture_id)
+    .bind(aggregate_type)
+    .bind(aggregate_id)
     .bind(payload)
     .bind(target.operation_id.0)
     .bind(target.command_id)

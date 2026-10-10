@@ -23,7 +23,7 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 use crate::capture::{CaptureError, CaptureStore, UnavailabilityObservation};
-use crate::capture_reporting::{ReportError, ReportTarget, append_report};
+use crate::capture_reporting::{ReportAggregate, ReportError, ReportTarget, append_report};
 use crate::permalink::CanonicalizedUrl;
 use crate::public_resolution::{
     ApprovedOembedClient, PARSER_VERSION, PublicResolutionError, PublicResolutionStore,
@@ -168,9 +168,6 @@ pub enum ResolverError {
     /// A terminal report could not be rendered.
     #[error("the terminal operation report could not be serialized")]
     Serialization(#[from] serde_json::Error),
-    /// A resolved capture has no stored social source to point its report at.
-    #[error("resolved capture {0} has no stored social source")]
-    MissingSource(Uuid),
 }
 
 impl From<ReportError> for ResolverError {
@@ -499,8 +496,13 @@ impl CaptureResolver {
         let operation = OperationId(row.operation_id);
         let report = match terminal {
             Terminal::Preserved => {
-                let source = self.stored_source(&mut transaction, row, post_id).await?;
-                preserved_report(operation, source)
+                match self.stored_source(&mut transaction, row, post_id).await? {
+                    Some(source) => preserved_report(operation, source),
+                    // The post the capture resolved to is gone (an owner deletion, for instance), so
+                    // there is nothing to point at. Failing the pass would crash-loop the service on
+                    // this one row while the operation waits for Platform's stale reaper.
+                    None => unavailable_report(operation, SourceUnavailability::Inaccessible),
+                }
             }
             Terminal::Unavailable(reason) => unavailable_report(operation, reason),
         }?;
@@ -508,7 +510,7 @@ impl CaptureResolver {
             owner: row.user_ref,
             operation_id: operation,
             command_id: row.command_id,
-            capture_id: row.capture_id,
+            aggregate: ReportAggregate::Capture(row.capture_id),
         };
         append_report(&mut transaction, &target, &report).await?;
         transaction
@@ -523,12 +525,19 @@ impl CaptureResolver {
         connection: &mut PgConnection,
         row: &Due,
         post_id: Option<Uuid>,
-    ) -> Result<SocialSourceId, ResolverError> {
-        let missing = || ResolverError::MissingSource(row.capture_id);
-        let post_id = post_id.ok_or_else(missing)?;
-        let source = publishing::social_source_id_for(connection, row.user_ref, post_id)
-            .await?
-            .ok_or_else(missing)?;
-        SocialSourceId::parse(&source.to_string()).map_err(|_| missing())
+    ) -> Result<Option<SocialSourceId>, ResolverError> {
+        let Some(post_id) = post_id else {
+            return Ok(None);
+        };
+        let Some(source) =
+            publishing::social_source_id_for(connection, row.user_ref, post_id).await?
+        else {
+            return Ok(None);
+        };
+        SocialSourceId::parse(&source.to_string())
+            .map(Some)
+            .map_err(|error| {
+                ResolverError::Report(SocialContractError::ReportConstruction(error.to_string()))
+            })
     }
 }

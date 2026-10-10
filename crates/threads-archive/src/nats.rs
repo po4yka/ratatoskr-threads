@@ -11,8 +11,8 @@ use async_nats::jetstream;
 use futures_util::StreamExt as _;
 use sqlx::PgPool;
 
-use crate::browser_capture_command::BrowserCaptureCommand;
-use crate::browser_capture_inbox::BrowserCaptureInbox;
+use crate::browser_capture_command::{BrowserCaptureCommand, Intake};
+use crate::browser_capture_inbox::{BrowserCaptureInbox, BrowserCaptureInboxError};
 use crate::{Database, PersistenceError};
 
 /// The fleet-owned command stream declared by Platform.
@@ -30,6 +30,8 @@ const SOCIAL_REMOVED_SUBJECT: &str = "evt.social.source.removed.v1";
 /// How long the broker connection may stay down before the worker gives up and the process is
 /// restarted by its supervisor.
 const DISCONNECT_GRACE: Duration = Duration::from_secs(5);
+/// The redelivery delay after a transient failure to commit a command (S02 item 7).
+const TRANSIENT_NAK_DELAY: Duration = Duration::from_secs(2);
 
 /// A connected NATS client retained beside its `JetStream` context.
 #[derive(Debug, Clone)]
@@ -137,8 +139,11 @@ impl ConnectionWatch {
 ///
 /// A capture is acknowledged only after its inbox/capture/outbox transaction
 /// committed and every pending outbox fact was acknowledged by `JetStream`.
-/// Malformed or wrong-provider commands are acknowledged after a warning: a
-/// broker redelivery cannot repair a bytestring this build refuses.
+/// A Threads command this build refuses (an unmappable permalink, widened provenance) still
+/// names an operation and an owner, so its inbox marker and a terminal `Inaccessible` report
+/// commit together before it is acknowledged. Input nobody is waiting on (undecodable, another
+/// provider, no owner) is terminated: a redelivery cannot repair it. A failed inbox write is
+/// negatively acknowledged with a 2 s delay and the worker keeps running (S02 item 7).
 ///
 /// # Errors
 ///
@@ -175,23 +180,48 @@ pub async fn run(
                     return Err(NatsError::Bus("the durable command stream ended".to_owned()));
                 };
                 let message = message.map_err(|error| NatsError::Bus(error.to_string()))?;
-                let command = match BrowserCaptureCommand::from_json(&message.payload) {
-                    Ok(command) => command,
-                    Err(error) => {
-                        tracing::warn!(%error, "rejecting malformed or non-Threads browser capture command");
-                        message.ack().await.map_err(|ack| NatsError::Bus(ack.to_string()))?;
-                        continue;
-                    }
-                };
-                inbox.deliver(&command).await.map_err(|error| match error {
-                    crate::browser_capture_inbox::BrowserCaptureInboxError::Persistence(error) => NatsError::Persistence(error),
-                    other => NatsError::Bus(other.to_string()),
-                })?;
-                flush_outbox(&connection.context, database.pool()).await?;
-                message.ack().await.map_err(|ack| NatsError::Bus(ack.to_string()))?;
+                handle_delivery(connection, database, &inbox, &message).await?;
             }
         }
     }
+}
+
+/// Settles one command delivery: commit, then publish, then acknowledge.
+async fn handle_delivery(
+    connection: &NatsConnection,
+    database: &Database,
+    inbox: &BrowserCaptureInbox<'_>,
+    message: &jetstream::Message,
+) -> Result<(), NatsError> {
+    let delivered = match BrowserCaptureCommand::intake(&message.payload) {
+        Intake::Accepted(command) => inbox.deliver(&command).await,
+        Intake::Rejected { command, reason } => {
+            tracing::warn!(%reason, "reporting a refused Threads browser capture command as inaccessible");
+            inbox.reject(&command).await
+        }
+        Intake::Invalid(reason) => {
+            tracing::warn!(%reason, "terminating a browser capture command that nobody is waiting on");
+            return settle(message, jetstream::AckKind::Term).await;
+        }
+    };
+    match delivered {
+        Ok(_) => {
+            flush_outbox(&connection.context, database.pool()).await?;
+            settle(message, jetstream::AckKind::Ack).await
+        }
+        Err(BrowserCaptureInboxError::Persistence(error)) => {
+            tracing::warn!(%error, "the inbox write failed; the command will be redelivered");
+            settle(message, jetstream::AckKind::Nak(Some(TRANSIENT_NAK_DELAY))).await
+        }
+        Err(other) => Err(NatsError::Bus(other.to_string())),
+    }
+}
+
+async fn settle(message: &jetstream::Message, kind: jetstream::AckKind) -> Result<(), NatsError> {
+    message
+        .ack_with(kind)
+        .await
+        .map_err(|error| NatsError::Bus(error.to_string()))
 }
 
 /// Verifies the command stream and durable consumer before readiness flips.

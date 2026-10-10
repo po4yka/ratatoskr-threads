@@ -5,8 +5,10 @@ use ratatoskr_social_contracts::{SocialContractError, queued_report};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::browser_capture_command::BrowserCaptureCommand;
-use crate::capture_reporting::{ReportError, ReportTarget, append_report};
+use ratatoskr_social_contracts::{SourceUnavailability, unavailable_report};
+
+use crate::browser_capture_command::{BrowserCaptureCommand, RejectedCommand};
+use crate::capture_reporting::{ReportAggregate, ReportError, ReportTarget, append_report};
 use crate::{Database, PersistenceError};
 
 const CONSUMER_NAME: &str = "threads_browser_capture";
@@ -19,6 +21,8 @@ pub enum BrowserCaptureDelivery {
         /// The owned explicit-capture record.
         capture_id: Uuid,
     },
+    /// The command was refused and its operation got a terminal failure report.
+    Rejected,
     /// This command delivery was already recorded by the durable inbox.
     Duplicate,
 }
@@ -29,7 +33,7 @@ impl BrowserCaptureDelivery {
     pub const fn capture_id(self) -> Option<Uuid> {
         match self {
             Self::Accepted { capture_id } => Some(capture_id),
-            Self::Duplicate => None,
+            Self::Rejected | Self::Duplicate => None,
         }
     }
 }
@@ -89,16 +93,7 @@ impl<'a> BrowserCaptureInbox<'a> {
         command: &BrowserCaptureCommand,
     ) -> Result<BrowserCaptureDelivery, BrowserCaptureInboxError> {
         let mut transaction = self.pool.begin().await.map_err(PersistenceError::Query)?;
-        let received = sqlx::query_scalar::<_, Uuid>(
-            "insert into threads_archive.inbox_events (consumer_name, event_id, consumed_at, handler_outcome) \
-             values ($1, $2, now(), 'processed') on conflict do nothing returning event_id",
-        )
-        .bind(CONSUMER_NAME)
-        .bind(command.command_id())
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(PersistenceError::Query)?;
-        if received.is_none() {
+        if !claim_delivery(&mut transaction, command.command_id(), "processed").await? {
             transaction
                 .commit()
                 .await
@@ -132,7 +127,7 @@ impl<'a> BrowserCaptureInbox<'a> {
             owner: command.user_ref(),
             operation_id: command.operation_id(),
             command_id: command.command_id(),
-            capture_id,
+            aggregate: ReportAggregate::Capture(capture_id),
         };
         let queued: OperationReported = queued_report(command.operation_id())?;
         append_report(&mut transaction, &target, &queued).await?;
@@ -143,4 +138,58 @@ impl<'a> BrowserCaptureInbox<'a> {
             .map_err(PersistenceError::Query)?;
         Ok(BrowserCaptureDelivery::Accepted { capture_id })
     }
+
+    /// Answers a refused command: the inbox marker and one terminal `Inaccessible` report commit
+    /// together, so the operation is never left waiting and a redelivery reports nothing more.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrowserCaptureInboxError`] without acknowledging the broker delivery when any
+    /// owned write fails.
+    pub async fn reject(
+        &self,
+        command: &RejectedCommand,
+    ) -> Result<BrowserCaptureDelivery, BrowserCaptureInboxError> {
+        let mut transaction = self.pool.begin().await.map_err(PersistenceError::Query)?;
+        if !claim_delivery(&mut transaction, command.command_id(), "rejected").await? {
+            transaction
+                .commit()
+                .await
+                .map_err(PersistenceError::Query)?;
+            return Ok(BrowserCaptureDelivery::Duplicate);
+        }
+        let target = ReportTarget {
+            owner: command.user_ref(),
+            operation_id: command.operation_id(),
+            command_id: command.command_id(),
+            aggregate: ReportAggregate::Operation,
+        };
+        let failed: OperationReported =
+            unavailable_report(command.operation_id(), SourceUnavailability::Inaccessible)?;
+        append_report(&mut transaction, &target, &failed).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(PersistenceError::Query)?;
+        Ok(BrowserCaptureDelivery::Rejected)
+    }
+}
+
+/// Records the delivery in the inbox, returning whether this is its first delivery.
+async fn claim_delivery(
+    connection: &mut sqlx::PgConnection,
+    command_id: Uuid,
+    outcome: &str,
+) -> Result<bool, PersistenceError> {
+    let claimed = sqlx::query_scalar::<_, Uuid>(
+        "insert into threads_archive.inbox_events (consumer_name, event_id, consumed_at, handler_outcome) \
+         values ($1, $2, now(), $3) on conflict do nothing returning event_id",
+    )
+    .bind(CONSUMER_NAME)
+    .bind(command_id)
+    .bind(outcome)
+    .fetch_optional(connection)
+    .await
+    .map_err(PersistenceError::Query)?;
+    Ok(claimed.is_some())
 }

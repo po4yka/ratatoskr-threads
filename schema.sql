@@ -564,7 +564,7 @@ create table threads_archive.outbox_events (
     next_attempt_at timestamptz,
     last_error      text,
     constraint outbox_events_aggregate_type_check
-        check (aggregate_type in ('capture', 'post', 'account', 'export_run')),
+        check (aggregate_type in ('capture', 'operation', 'post', 'account', 'export_run')),
     constraint outbox_events_event_type_check
         check (event_type in ('platform.operation.reported.v1', 'social.source.captured.v1',
                               'social.source.updated.v1', 'social.source.removed.v1'))

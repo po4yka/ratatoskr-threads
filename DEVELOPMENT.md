@@ -24,7 +24,7 @@ With the bus configured the surface that completes its work must be configured t
 evidence) is required, and the process refuses to start (exit 78) without it. This is a breaking change
 of XR-021: a bus-only configuration used to boot and now does not. The same change edited
 `schema.sql` in place (`captures.operation_id`, `command_id`, `resolution_attempts`,
-`operation_reported_at`, `outbox_events.last_error` and the `event_type` CHECK); there is no migration,
+`operation_reported_at`, `outbox_events.last_error`, the `event_type` CHECK and the `operation` value of the `aggregate_type` CHECK); there is no migration,
 so recreate a development database from the current schema.
 
 ## Code size limits

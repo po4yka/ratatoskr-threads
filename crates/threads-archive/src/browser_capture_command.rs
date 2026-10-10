@@ -24,6 +24,54 @@ pub struct BrowserCaptureCommand {
     saved_authority: SavedAuthority,
 }
 
+/// A Threads command that was refused, with what is still known about whom to answer.
+///
+/// The envelope and payload decoded, the provider is Threads and the owner is named, so Platform
+/// is waiting on `operation_id` and must be told that the capture cannot happen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RejectedCommand {
+    command_id: Uuid,
+    user_ref: Uuid,
+    operation_id: OperationId,
+}
+
+impl RejectedCommand {
+    /// The command delivery identity used by the durable inbox.
+    #[must_use]
+    pub const fn command_id(&self) -> Uuid {
+        self.command_id
+    }
+
+    /// The Ratatoskr user who owns the refused capture.
+    #[must_use]
+    pub const fn user_ref(&self) -> Uuid {
+        self.user_ref
+    }
+
+    /// The Platform operation that is waiting for an answer.
+    #[must_use]
+    pub const fn operation_id(&self) -> OperationId {
+        self.operation_id
+    }
+}
+
+/// What the consumer does with one broker payload.
+#[derive(Debug)]
+pub enum Intake {
+    /// A command this service can capture.
+    Accepted(BrowserCaptureCommand),
+    /// A Threads command with an operation and an owner that cannot be captured: the operation
+    /// still gets a terminal failure.
+    Rejected {
+        /// Whom to answer.
+        command: RejectedCommand,
+        /// Why the command was refused.
+        reason: BrowserCaptureCommandError,
+    },
+    /// Input nobody is waiting on (undecodable, another provider, no owner): dropped for good.
+    Invalid(BrowserCaptureCommandError),
+}
+
 /// A command that this consumer cannot accept.
 #[derive(Debug, thiserror::Error)]
 pub enum BrowserCaptureCommandError {
@@ -51,6 +99,35 @@ pub enum BrowserCaptureCommandError {
     /// The contract carried a digest algorithm this first-version handler cannot use as an idempotency key.
     #[error("the browser capture command has an unsupported idempotency digest")]
     UnsupportedIdempotencyDigest,
+}
+
+impl BrowserCaptureCommandError {
+    /// Whether a command refused with this error still deserves an answer.
+    ///
+    /// True for the refusals that come after the provider and owner checks passed: the command
+    /// was meant for Threads, its operation is waiting, and nothing a redelivery does can change
+    /// the answer.
+    const fn is_attributable(&self) -> bool {
+        matches!(
+            self,
+            Self::InvalidAcquisition
+                | Self::InvalidSavedAuthority
+                | Self::InvalidPermalink
+                | Self::InvalidCapturedAt
+                | Self::UnsupportedIdempotencyDigest
+        )
+    }
+}
+
+/// The operation and owner a refused Threads command names, when it names both.
+fn attribute(envelope: &CommandEnvelope) -> Option<RejectedCommand> {
+    let payload = envelope.payload_as::<SocialCaptureRequested>().ok()?;
+    let user_ref = envelope.tenant_id?.user_id().0;
+    Some(RejectedCommand {
+        command_id: envelope.command_id.0,
+        user_ref,
+        operation_id: payload.operation_id,
+    })
 }
 
 impl BrowserCaptureCommand {
@@ -105,16 +182,25 @@ impl BrowserCaptureCommand {
         })
     }
 
-    /// Deserializes and validates a broker command.
+    /// Decides what to do with a broker payload.
     ///
-    /// # Errors
-    ///
-    /// Returns [`BrowserCaptureCommandError`] when the canonical envelope or
-    /// its Threads payload cannot be accepted.
-    pub fn from_json(bytes: &[u8]) -> Result<Self, BrowserCaptureCommandError> {
-        let envelope =
-            CommandEnvelope::from_json(bytes).map_err(BrowserCaptureCommandError::Malformed)?;
-        Self::parse(&envelope)
+    /// A payload this service refuses for a reason of its own (a permalink it cannot map, widened
+    /// provenance, an unusable digest) is [`Intake::Rejected`] when the command names its
+    /// operation and owner; anything else that fails is [`Intake::Invalid`].
+    #[must_use]
+    pub fn intake(bytes: &[u8]) -> Intake {
+        let envelope = match CommandEnvelope::from_json(bytes) {
+            Ok(envelope) => envelope,
+            Err(error) => return Intake::Invalid(BrowserCaptureCommandError::Malformed(error)),
+        };
+        match Self::parse(&envelope) {
+            Ok(command) => Intake::Accepted(command),
+            Err(reason) if reason.is_attributable() => match attribute(&envelope) {
+                Some(command) => Intake::Rejected { command, reason },
+                None => Intake::Invalid(reason),
+            },
+            Err(reason) => Intake::Invalid(reason),
+        }
     }
 
     /// The command delivery identity used by the durable inbox.
