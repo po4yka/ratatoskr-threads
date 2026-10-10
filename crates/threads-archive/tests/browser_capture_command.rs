@@ -1,14 +1,15 @@
 //! Contract boundary for provider-specific browser capture commands.
 
 use ratatoskr_event_envelope::{
-    CommandEnvelope, CommandPayload as _, EnvelopeSchemaVersion, ProducerName,
+    CommandEnvelope, CommandPayload as _, EnvelopeSchemaVersion, EventEnvelope, ProducerName,
 };
 use ratatoskr_identifiers::{
-    CommandId, ContentDigest, DigestAlgorithm, DigestHex, EntityRef, Extensions, OperationId,
-    TenantRef, UserId, WireTimestamp,
+    CommandId, ContentDigest, DigestAlgorithm, DigestHex, EntityRef, EventId, Extensions,
+    OperationId, TenantRef, UserId, WireTimestamp,
 };
 use ratatoskr_social_contracts::{
-    AcquisitionMethod, PostPermalink, SavedAuthority, SocialCaptureProvider, SocialCaptureRequested,
+    AcquisitionMethod, PostPermalink, SavedAuthority, SocialCaptureProvider,
+    SocialCaptureRequested, queued_report, report_envelope,
 };
 use uuid::Uuid;
 
@@ -136,6 +137,86 @@ async fn threads_command_is_deduplicated_with_capture_provenance_and_queued_oper
         .await
         .expect("counting captures");
     assert_eq!(captures, 1, "redelivery must not create another capture");
+
+    database.cleanup().await.expect("cleanup");
+}
+
+/// `operation_id`, `command_id`, `resolution_attempts`, `operation_reported_at`,
+/// `next_resolution_at` and whether that is already due.
+type Bookkeeping = (
+    Option<Uuid>,
+    Option<Uuid>,
+    i32,
+    Option<chrono::DateTime<chrono::Utc>>,
+    Option<chrono::DateTime<chrono::Utc>>,
+    Option<bool>,
+);
+
+#[tokio::test]
+async fn intake_stores_operation_and_schedules_resolution() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let command = BrowserCaptureCommand::parse(&browser_command(SocialCaptureProvider::Threads))
+        .expect("the Threads command is accepted");
+
+    let capture_id = BrowserCaptureInbox::new(&database.database)
+        .deliver(&command)
+        .await
+        .expect("the command persists")
+        .capture_id()
+        .expect("the first delivery is accepted");
+
+    let (operation_id, command_id, attempts, reported_at, due_at, due_now): Bookkeeping =
+        sqlx::query_as(
+            "select operation_id, command_id, resolution_attempts, operation_reported_at, \
+                next_resolution_at, next_resolution_at <= now() \
+         from threads_archive.captures where capture_id = $1",
+        )
+        .bind(capture_id)
+        .fetch_one(database.database.pool())
+        .await
+        .expect("the capture is stored with its operation bookkeeping");
+    assert_eq!(operation_id, Some(command.operation_id().0));
+    assert_eq!(command_id, Some(command.command_id()));
+    assert_eq!(attempts, 0);
+    assert_eq!(reported_at, None, "nothing was reported terminally yet");
+    assert!(due_at.is_some(), "resolution must be scheduled at intake");
+    assert_eq!(due_now, Some(true), "resolution is due immediately");
+
+    let (event_id, aggregate_id, correlation_id, causation_id, payload): (
+        Uuid,
+        Uuid,
+        Option<Uuid>,
+        Option<Uuid>,
+        serde_json::Value,
+    ) = sqlx::query_as(
+        "select event_id, aggregate_id, correlation_id, causation_id, payload \
+         from threads_archive.outbox_events \
+         where aggregate_type = 'capture' and event_type = 'platform.operation.reported.v1'",
+    )
+    .fetch_one(database.database.pool())
+    .await
+    .expect("exactly one queued report is durable");
+    assert_eq!(aggregate_id, capture_id);
+    assert_eq!(correlation_id, Some(command.operation_id().0));
+    assert_eq!(causation_id, Some(command.command_id()));
+
+    let mut expected = report_envelope(
+        "ratatoskr-threads",
+        UserId(command.user_ref()),
+        command.operation_id(),
+        EntityRef::parse(&format!("capture:{capture_id}")).expect("a capture reference"),
+        CommandId(command.command_id()),
+        EventId(event_id),
+        &queued_report(command.operation_id()).expect("the queued report"),
+    )
+    .expect("the contracts envelope builds");
+    let stored = EventEnvelope::from_json(payload.to_string().as_bytes())
+        .expect("the stored report is a canonical envelope");
+    expected.occurred_at = stored.occurred_at;
+    assert_eq!(
+        stored, expected,
+        "the queued report is exactly the contracts builder's"
+    );
 
     database.cleanup().await.expect("cleanup");
 }

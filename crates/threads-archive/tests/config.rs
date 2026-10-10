@@ -4,6 +4,9 @@ use secrecy::ExposeSecret as _;
 
 use ratatoskr_threads_archive::{Config, StorageConfig};
 
+const REQUIRED_RESOLVER_ROOT: &str = "RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT";
+const RESOLVER_ROOT: &str = "/var/lib/ratatoskr/threads/raw";
+
 #[test]
 fn empty_environment_refuses_to_start_without_the_command_bus() {
     let error = Config::from_environment(Vec::<(String, String)>::new())
@@ -34,6 +37,7 @@ fn multiple_violations_reported_together_value_free() {
         ("RATATOSKR__ADMIN__LISTEN_ADDRESS", "10.0.0.1:9084"),
         ("RATATOSKR__LIMITS__DATABASE_CONNECTIONS", "0"),
         ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        (REQUIRED_RESOLVER_ROOT, RESOLVER_ROOT),
     ])
     .expect_err("two independent violations must both be refused");
 
@@ -63,6 +67,7 @@ fn recognized_override_changes_exactly_its_own_field() {
             "postgres://threads:threads@127.0.0.1:5437/threads",
         ),
         ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        (REQUIRED_RESOLVER_ROOT, RESOLVER_ROOT),
     ])
     .expect("valid overrides must load");
 
@@ -115,6 +120,7 @@ fn bus_configuration_requires_an_endpoint_and_accepts_an_optional_nkey_path() {
             "RATATOSKR__BUS__NKEY_SEED_PATH",
             "/run/ratatoskr/threads.nkey",
         ),
+        (REQUIRED_RESOLVER_ROOT, RESOLVER_ROOT),
     ])
     .expect("the bounded NATS configuration is accepted");
     assert_eq!(config.bus.url, "tls://nats.internal:4222");
@@ -125,5 +131,83 @@ fn bus_configuration_requires_an_endpoint_and_accepts_an_optional_nkey_path() {
             .expect("the nkey path is retained")
             .to_string_lossy(),
         "/run/ratatoskr/threads.nkey"
+    );
+}
+
+#[test]
+fn bus_configuration_requires_the_public_resolution_surface() {
+    let error = Config::from_environment([("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222")])
+        .expect_err("a bus without the surface that completes its work is refused");
+
+    assert_eq!(error.violations.len(), 1, "{error}");
+    assert!(
+        error.to_string().contains(REQUIRED_RESOLVER_ROOT),
+        "{error}"
+    );
+}
+
+#[test]
+fn public_resolution_defaults_to_the_official_endpoint_and_a_bounded_retry_budget() {
+    let config = Config::from_environment([
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        (REQUIRED_RESOLVER_ROOT, RESOLVER_ROOT),
+    ])
+    .expect("the minimal resolver configuration loads");
+
+    let resolution = &config.public_resolution;
+    assert_eq!(
+        resolution.oembed_endpoint,
+        "https://graph.threads.com/oembed"
+    );
+    assert_eq!(
+        resolution
+            .raw_object_root
+            .as_deref()
+            .map(std::path::Path::new),
+        Some(std::path::Path::new("/var/lib/ratatoskr/threads/raw"))
+    );
+    assert_eq!(resolution.max_attempts, 5);
+    assert_eq!(resolution.batch_size, 8);
+    assert_eq!(resolution.poll_interval_ms, 2_000);
+}
+
+#[test]
+fn public_resolution_overrides_apply_and_unsafe_values_are_refused_by_key() {
+    let config = Config::from_environment([
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        (REQUIRED_RESOLVER_ROOT, RESOLVER_ROOT),
+        ("RATATOSKR__PUBLIC_RESOLUTION__MAX_ATTEMPTS", "3"),
+        ("RATATOSKR__PUBLIC_RESOLUTION__BATCH_SIZE", "2"),
+        ("RATATOSKR__PUBLIC_RESOLUTION__POLL_INTERVAL_MS", "250"),
+    ])
+    .expect("valid overrides load");
+    assert_eq!(config.public_resolution.max_attempts, 3);
+    assert_eq!(config.public_resolution.batch_size, 2);
+    assert_eq!(config.public_resolution.poll_interval_ms, 250);
+
+    let error = Config::from_environment([
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        (REQUIRED_RESOLVER_ROOT, "relative/raw"),
+        (
+            "RATATOSKR__PUBLIC_RESOLUTION__OEMBED_ENDPOINT",
+            "http://graph.threads.com/oembed",
+        ),
+        ("RATATOSKR__PUBLIC_RESOLUTION__MAX_ATTEMPTS", "0"),
+    ])
+    .expect_err("a relative root, a plain-HTTP endpoint and a zero budget are refused");
+    let rendered = error.to_string();
+    assert_eq!(error.violations.len(), 3, "{rendered}");
+    assert!(rendered.contains(REQUIRED_RESOLVER_ROOT), "{rendered}");
+    assert!(
+        rendered.contains("RATATOSKR__PUBLIC_RESOLUTION__OEMBED_ENDPOINT"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("RATATOSKR__PUBLIC_RESOLUTION__MAX_ATTEMPTS"),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains("relative/raw"),
+        "values must never render: {rendered}"
     );
 }

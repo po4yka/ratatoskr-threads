@@ -14,7 +14,10 @@ use std::path::PathBuf;
 use secrecy::SecretString;
 use serde::Serialize;
 
+use crate::public_resolution::is_approved_endpoint;
+
 const ENV_PREFIX: &str = "RATATOSKR__";
+const RAW_OBJECT_ROOT_KEY: &str = "RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT";
 
 /// Process configuration with finite built-in limits.
 #[derive(Debug, Clone, Serialize)]
@@ -25,6 +28,8 @@ pub struct Config {
     pub storage: StorageConfig,
     /// NATS configuration for provider-command consumption.
     pub bus: BusConfig,
+    /// The public oEmbed resolution surface that completes accepted captures.
+    pub public_resolution: PublicResolutionConfig,
     /// Telemetry pipeline configuration.
     pub telemetry: TelemetryConfig,
     /// Resource and shutdown limits.
@@ -38,6 +43,21 @@ pub struct BusConfig {
     pub url: String,
     /// Optional path to this role's NATS nkey seed; the seed itself never enters config.
     pub nkey_seed_path: Option<PathBuf>,
+}
+
+/// The public Threads oEmbed surface and the bounded retry policy of the capture resolver.
+#[derive(Debug, Clone, Serialize)]
+pub struct PublicResolutionConfig {
+    /// The approved HTTPS oEmbed endpoint.
+    pub oembed_endpoint: String,
+    /// The absolute directory holding content-addressed raw evidence.
+    pub raw_object_root: Option<PathBuf>,
+    /// Transient failures tolerated before a capture is reported unavailable.
+    pub max_attempts: u32,
+    /// Captures claimed per resolver pass.
+    pub batch_size: u32,
+    /// Pause between resolver passes.
+    pub poll_interval_ms: u64,
 }
 
 /// Loopback-only operator listener configuration.
@@ -177,6 +197,17 @@ impl Config {
                 key: "RATATOSKR__BUS__URL".to_owned(),
                 rule: "is required for the Threads command consumer",
             });
+        } else if config.public_resolution.raw_object_root.is_none()
+            && !violations
+                .iter()
+                .any(|violation| violation.key == RAW_OBJECT_ROOT_KEY)
+        {
+            // A consumer that accepts captures it cannot complete would report itself ready while
+            // every capture stays queued, so the surface that completes them is part of the bus.
+            violations.push(Violation {
+                key: RAW_OBJECT_ROOT_KEY.to_owned(),
+                rule: "is required when the bus is configured",
+            });
         }
 
         if violations.is_empty() {
@@ -225,6 +256,33 @@ fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec
                 violations.push(refused("must be an absolute path to a readable nkey seed"));
             }
         }
+        "RATATOSKR__PUBLIC_RESOLUTION__OEMBED_ENDPOINT" => {
+            if is_approved_endpoint(value) {
+                value.clone_into(&mut config.public_resolution.oembed_endpoint);
+            } else {
+                violations.push(refused("must be an approved https Threads oEmbed endpoint"));
+            }
+        }
+        RAW_OBJECT_ROOT_KEY => {
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                config.public_resolution.raw_object_root = Some(path);
+            } else {
+                violations.push(refused("must be an absolute directory path"));
+            }
+        }
+        "RATATOSKR__PUBLIC_RESOLUTION__MAX_ATTEMPTS" => match parse_positive::<u32>(value) {
+            Ok(parsed) => config.public_resolution.max_attempts = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
+        "RATATOSKR__PUBLIC_RESOLUTION__BATCH_SIZE" => match parse_positive::<u32>(value) {
+            Ok(parsed) => config.public_resolution.batch_size = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
+        "RATATOSKR__PUBLIC_RESOLUTION__POLL_INTERVAL_MS" => match parse_positive::<u64>(value) {
+            Ok(parsed) => config.public_resolution.poll_interval_ms = parsed,
+            Err(rule) => violations.push(refused(rule)),
+        },
         "RATATOSKR__TELEMETRY__LOG_FILTER" => {
             if value.trim().is_empty() {
                 violations.push(refused("must be a non-empty tracing filter expression"));
@@ -277,6 +335,13 @@ impl Default for Config {
             bus: BusConfig {
                 url: String::new(),
                 nkey_seed_path: None,
+            },
+            public_resolution: PublicResolutionConfig {
+                oembed_endpoint: "https://graph.threads.com/oembed".to_owned(),
+                raw_object_root: None,
+                max_attempts: 5,
+                batch_size: 8,
+                poll_interval_ms: 2_000,
             },
             telemetry: TelemetryConfig {
                 log_filter: "info".to_owned(),

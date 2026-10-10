@@ -20,6 +20,10 @@ pub mod capability;
 /// Explicit capture intake: validated requests, stored capture records, and
 /// truthful unavailability observations.
 pub mod capture;
+pub(crate) mod capture_reporting;
+/// Resolution of accepted captures through the public oEmbed surface, with bounded retry and
+/// exactly-once terminal operation reports.
+pub mod capture_resolution;
 pub mod config;
 /// Safe Data Export archive receipt, inspection, parsing, and reconciliation.
 pub mod data_export;
@@ -50,7 +54,8 @@ pub mod relation;
 pub mod telemetry;
 
 pub use config::{
-    AdminConfig, BusConfig, Config, ConfigError, Limits, StorageConfig, TelemetryConfig,
+    AdminConfig, BusConfig, Config, ConfigError, Limits, PublicResolutionConfig, StorageConfig,
+    TelemetryConfig,
 };
 pub use database::{Database, PersistenceError};
 pub use telemetry::{TelemetryError, TelemetryGuard, init_telemetry};

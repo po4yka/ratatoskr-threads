@@ -26,6 +26,10 @@ const OUTBOX_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const OPERATION_REPORT_SUBJECT: &str = "evt.platform.operation.reported.v1";
 const SOCIAL_CAPTURED_SUBJECT: &str = "evt.social.source.captured.v1";
 const SOCIAL_UPDATED_SUBJECT: &str = "evt.social.source.updated.v1";
+const SOCIAL_REMOVED_SUBJECT: &str = "evt.social.source.removed.v1";
+/// How long the broker connection may stay down before the worker gives up and the process is
+/// restarted by its supervisor.
+const DISCONNECT_GRACE: Duration = Duration::from_secs(5);
 
 /// A connected NATS client retained beside its `JetStream` context.
 #[derive(Debug, Clone)]
@@ -96,6 +100,37 @@ pub enum NatsError {
     /// An outbox row requested a subject outside this service's NATS grant.
     #[error("the outbox event type is not permitted for Threads publication")]
     UnexpectedOutboxEventType,
+    /// The broker did not acknowledge a publication.
+    ///
+    /// A missing acknowledgement is indistinguishable from a permission denial.
+    #[error(
+        "the broker did not acknowledge a publication; check the NATS server log for a Publish Violation"
+    )]
+    Unacknowledged,
+}
+
+/// Notices a broker connection that stays down.
+#[derive(Debug, Default)]
+struct ConnectionWatch {
+    lost_since: Option<tokio::time::Instant>,
+}
+
+impl ConnectionWatch {
+    /// Fails once the connection has been down for longer than [`DISCONNECT_GRACE`]; a brief
+    /// reconnect is tolerated.
+    fn check(&mut self, connection: &NatsConnection) -> Result<(), NatsError> {
+        if connection.is_connected() {
+            self.lost_since = None;
+            return Ok(());
+        }
+        let since = *self
+            .lost_since
+            .get_or_insert_with(tokio::time::Instant::now);
+        if since.elapsed() >= DISCONNECT_GRACE {
+            return Err(NatsError::Bus("the NATS connection was lost".to_owned()));
+        }
+        Ok(())
+    }
 }
 
 /// Runs the durable Threads command consumer until `stop` resolves.
@@ -124,13 +159,17 @@ pub async fn run(
     let mut outbox_ticker = tokio::time::interval(OUTBOX_POLL_INTERVAL);
     outbox_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     tokio::pin!(stop);
+    let mut watch = ConnectionWatch::default();
 
     flush_outbox(&connection.context, database.pool()).await?;
     loop {
         tokio::select! {
             biased;
             () = &mut stop => return Ok(()),
-            _ = outbox_ticker.tick() => flush_outbox(&connection.context, database.pool()).await?,
+            _ = outbox_ticker.tick() => {
+                watch.check(connection)?;
+                flush_outbox(&connection.context, database.pool()).await?;
+            }
             message = messages.next() => {
                 let Some(message) = message else {
                     return Err(NatsError::Bus("the durable command stream ended".to_owned()));
@@ -210,40 +249,76 @@ fn validate_preprovisioned_consumer(
     Ok(())
 }
 
+/// Publishes the unpublished outbox rows that are due, oldest first.
+///
+/// A row that fails to publish stays unpublished, counts the attempt, records a content-free
+/// failure class and backs off exponentially (2 s, 4 s, ... capped at 5 min), so it cannot starve
+/// the rows behind it. The pass still reaches those rows, then surfaces the first failure so the
+/// worker stops and the process is restarted rather than staying ready over a broken relay. A row
+/// whose event type has no subject is a programming error, which the table CHECK makes
+/// unstorable: it stops the worker at once.
 async fn flush_outbox(context: &jetstream::Context, pool: &PgPool) -> Result<(), NatsError> {
     let rows: Vec<(uuid::Uuid, String, serde_json::Value)> = sqlx::query_as(
         "select event_id, event_type, payload from threads_archive.outbox_events \
-         where published_at is null order by occurred_at, event_id limit $1",
+         where published_at is null and (next_attempt_at is null or next_attempt_at <= now()) \
+         order by occurred_at, event_id limit $1",
     )
     .bind(OUTBOX_BATCH_SIZE)
     .fetch_all(pool)
     .await
     .map_err(PersistenceError::Query)?;
+    let mut first_failure = None;
     for (event_id, event_type, payload) in rows {
         let subject = outbox_subject(&event_type).ok_or(NatsError::UnexpectedOutboxEventType)?;
-        let mut headers = async_nats::HeaderMap::new();
-        headers.insert("Nats-Msg-Id", event_id.to_string());
-        let acknowledgement = context
-            .publish_with_headers(
-                subject,
-                headers,
-                serde_json::to_vec(&payload)
-                    .map_err(|error| NatsError::Bus(error.to_string()))?
-                    .into(),
-            )
-            .await
-            .map_err(|error| NatsError::Bus(error.to_string()))?;
-        acknowledgement
-            .await
-            .map_err(|error| NatsError::Bus(error.to_string()))?;
-        sqlx::query(
-            "update threads_archive.outbox_events set published_at = now() where event_id = $1",
-        )
-        .bind(event_id)
-        .execute(pool)
-        .await
-        .map_err(PersistenceError::Query)?;
+        match publish_row(context, subject, event_id, &payload).await {
+            Ok(()) => {
+                sqlx::query(
+                    "update threads_archive.outbox_events set published_at = now() \
+                     where event_id = $1",
+                )
+                .bind(event_id)
+                .execute(pool)
+                .await
+                .map_err(PersistenceError::Query)?;
+            }
+            Err((failure_class, error)) => {
+                sqlx::query(
+                    "update threads_archive.outbox_events \
+                     set attempt_count = attempt_count + 1, last_error = $2, \
+                         next_attempt_at = now() + make_interval(\
+                             secs => least(power(2, attempt_count), 300)::float8) \
+                     where event_id = $1",
+                )
+                .bind(event_id)
+                .bind(failure_class)
+                .execute(pool)
+                .await
+                .map_err(PersistenceError::Query)?;
+                first_failure.get_or_insert(error);
+            }
+        }
     }
+    first_failure.map_or(Ok(()), Err)
+}
+
+/// Publishes one row and waits for its `PubAck`, naming the failure class on error.
+async fn publish_row(
+    context: &jetstream::Context,
+    subject: &'static str,
+    event_id: uuid::Uuid,
+    payload: &serde_json::Value,
+) -> Result<(), (&'static str, NatsError)> {
+    let body = serde_json::to_vec(payload)
+        .map_err(|error| ("serialization_failed", NatsError::Bus(error.to_string())))?;
+    let mut headers = async_nats::HeaderMap::new();
+    headers.insert("Nats-Msg-Id", event_id.to_string());
+    let acknowledgement = context
+        .publish_with_headers(subject, headers, body.into())
+        .await
+        .map_err(|error| ("publish_failed", NatsError::Bus(error.to_string())))?;
+    acknowledgement
+        .await
+        .map_err(|_| ("ack_failed", NatsError::Unacknowledged))?;
     Ok(())
 }
 
@@ -252,6 +327,7 @@ fn outbox_subject(event_type: &str) -> Option<&'static str> {
         "platform.operation.reported.v1" => Some(OPERATION_REPORT_SUBJECT),
         "social.source.captured.v1" => Some(SOCIAL_CAPTURED_SUBJECT),
         "social.source.updated.v1" => Some(SOCIAL_UPDATED_SUBJECT),
+        "social.source.removed.v1" => Some(SOCIAL_REMOVED_SUBJECT),
         _ => None,
     }
 }
@@ -287,7 +363,11 @@ mod tests {
             outbox_subject("social.source.updated.v1"),
             Some("evt.social.source.updated.v1")
         );
-        assert_eq!(outbox_subject("social.source.removed.v1"), None);
+        assert_eq!(
+            outbox_subject("social.source.removed.v1"),
+            Some("evt.social.source.removed.v1")
+        );
+        assert_eq!(outbox_subject("social.source.deleted.v1"), None);
     }
 
     #[test]

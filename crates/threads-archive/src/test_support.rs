@@ -4,6 +4,8 @@
 //! worth testing here — constraint refusal, idempotent re-application,
 //! catalog shape — need a database whose contents no other test has touched.
 
+pub mod fake_oembed;
+
 use sqlx::Executor as _;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use uuid::Uuid;
@@ -36,6 +38,36 @@ pub fn admin_url() -> String {
         Ok(value) => value,
         Err(_) => "postgres://threads:threads@127.0.0.1:5437/threads".to_owned(),
     }
+}
+
+/// Where the JetStream-enabled test broker listens.
+///
+/// `THREADS_ARCHIVE_TEST_NATS_URL` overrides it; the default matches
+/// `compose.yaml`.
+///
+/// # Panics
+///
+/// Never in normal operation; see [`admin_url`] for why the environment read
+/// is sanctioned here.
+#[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test-only broker location is not process configuration"
+)]
+pub fn nats_url() -> String {
+    match std::env::var("THREADS_ARCHIVE_TEST_NATS_URL") {
+        Ok(value) => value,
+        Err(_) => "nats://127.0.0.1:5422".to_owned(),
+    }
+}
+
+/// A directory for the raw evidence of a service process started by a test.
+///
+/// The service creates it on start; `RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT` is required
+/// whenever the bus is configured, which every such test does.
+#[must_use]
+pub fn raw_object_root() -> std::path::PathBuf {
+    std::env::temp_dir().join("ratatoskr-threads-test-raw")
 }
 
 /// An isolated disposable archive database.

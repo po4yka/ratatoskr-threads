@@ -3,78 +3,30 @@
 use std::time::Duration;
 
 use futures_util::StreamExt as _;
-use ratatoskr_event_envelope::{
-    CommandEnvelope, CommandPayload as _, EnvelopeSchemaVersion, ProducerName,
-};
-use ratatoskr_identifiers::{
-    CommandId, ContentDigest, DigestAlgorithm, DigestHex, EntityRef, Extensions, OperationId,
-    TenantRef, UserId, WireTimestamp,
-};
-use ratatoskr_social_contracts::{
-    AcquisitionMethod, PostPermalink, SavedAuthority, SocialCaptureProvider, SocialCaptureRequested,
-};
+use ratatoskr_threads_archive::capture_resolution::{CaptureResolver, ResolverPolicy};
 use ratatoskr_threads_archive::nats::{
     self, COMMAND_STREAM, COMMAND_SUBJECT, CONSUMER_NAME, NatsConnection,
 };
-use ratatoskr_threads_archive::test_support::TestDatabase;
+use ratatoskr_threads_archive::public_resolution::{ApprovedOembedClient, RawObjectStore};
+use ratatoskr_threads_archive::test_support::fake_oembed::{FakeOembed, FakeReply};
+use ratatoskr_threads_archive::test_support::{TestDatabase, nats_url};
 use uuid::Uuid;
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the isolated test broker endpoint is selected by the test process"
-)]
-fn nats_url() -> String {
-    std::env::var("THREADS_ARCHIVE_TEST_NATS_URL")
-        .unwrap_or_else(|_| "nats://127.0.0.1:5422".to_owned())
-}
+mod common;
+
+use common::{PERMALINK, threads_command};
+
+/// Every test here runs the real worker against the one durable consumer of the shared broker, so
+/// two of them at once would steal each other's commands.
+static BROKER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[expect(
     clippy::expect_used,
-    reason = "fixture helper: every constructed fragment is static and contract-valid"
+    reason = "fixture helper: the broker topology is a precondition of every test here"
 )]
-fn command() -> CommandEnvelope {
-    let payload = SocialCaptureRequested {
-        operation_id: OperationId(Uuid::now_v7()),
-        idempotency_key: ContentDigest {
-            algorithm: DigestAlgorithm::Sha256,
-            hex: DigestHex::parse(&"a".repeat(64)).expect("a SHA-256 digest"),
-        },
-        original_permalink: PostPermalink::parse("https://www.threads.net/@author/post/AbCd1")
-            .expect("a permalink"),
-        captured_at: WireTimestamp::now(), // wall-clock: opaque fixture value, unused by any assertion in this file
-        provider: SocialCaptureProvider::Threads,
-        acquisition: AcquisitionMethod::BrowserExtension,
-        saved_authority: SavedAuthority::ExplicitUserCapture,
-        extensions: Extensions::new(),
-    };
-    let operation = EntityRef::parse(&format!("operation:{}", payload.operation_id.0))
-        .expect("an operation reference");
-    CommandEnvelope {
-        command_id: CommandId(Uuid::now_v7()),
-        command_type: SocialCaptureRequested::command_type(),
-        issued_at: WireTimestamp::now(), // wall-clock: opaque fixture value, unused by any assertion in this file
-        producer: ProducerName::parse("ratatoskr-platform").expect("a producer"),
-        aggregate_id: operation.clone(),
-        correlation_id: operation,
-        causation_id: None,
-        tenant_id: Some(TenantRef::of_user(UserId(Uuid::now_v7()))),
-        schema_version: EnvelopeSchemaVersion::CURRENT,
-        payload: serde_json::to_value(payload)
-            .expect("the command serializes")
-            .as_object()
-            .expect("the payload is an object")
-            .clone(),
-        extensions: Extensions::new(),
-    }
-}
-
-#[tokio::test]
-async fn durable_threads_subject_commits_then_reports_and_acknowledges() {
-    let database = TestDatabase::create().await.expect("a test database");
-    let client = async_nats::connect(nats_url())
-        .await
-        .expect("the isolated NATS broker is reachable");
-    let context = async_nats::jetstream::new(client.clone());
+async fn provision(
+    context: &async_nats::jetstream::Context,
+) -> async_nats::jetstream::stream::Stream {
     let commands = context
         .get_or_create_stream(async_nats::jetstream::stream::Config {
             name: COMMAND_STREAM.to_owned(),
@@ -102,6 +54,18 @@ async fn durable_threads_subject_commits_then_reports_and_acknowledges() {
         )
         .await
         .expect("the preprovisioned Threads consumer exists");
+    commands
+}
+
+#[tokio::test]
+async fn durable_threads_subject_commits_then_reports_and_acknowledges() {
+    let _broker = BROKER.lock().await;
+    let database = TestDatabase::create().await.expect("a test database");
+    let client = async_nats::connect(nats_url())
+        .await
+        .expect("the isolated NATS broker is reachable");
+    let context = async_nats::jetstream::new(client.clone());
+    let commands = provision(&context).await;
     let mut reports = client
         .subscribe("evt.platform.operation.reported.v1")
         .await
@@ -122,7 +86,7 @@ async fn durable_threads_subject_commits_then_reports_and_acknowledges() {
         .await
     });
 
-    let command = command();
+    let command = threads_command(Uuid::now_v7());
     let published = context
         .publish(
             COMMAND_SUBJECT,
@@ -160,9 +124,18 @@ async fn durable_threads_subject_commits_then_reports_and_acknowledges() {
         .get_consumer::<async_nats::jetstream::consumer::pull::Config>(CONSUMER_NAME)
         .await
         .expect("reading the preprovisioned consumer");
-    let info = consumer.info().await.expect("reading consumer state");
-    assert_eq!(info.num_pending, 0, "the durable command was acknowledged");
-    assert_eq!(info.num_ack_pending, 0, "no unacknowledged command remains");
+    // The acknowledgement follows the report on the wire, so give the broker a moment to apply it.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let (pending, ack_pending) = loop {
+        let info = consumer.info().await.expect("reading consumer state");
+        let counts = (info.num_pending, info.num_ack_pending);
+        if counts == (0, 0) || tokio::time::Instant::now() >= deadline {
+            break counts;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(pending, 0, "the durable command was acknowledged");
+    assert_eq!(ack_pending, 0, "no unacknowledged command remains");
 
     stop_tx.send(()).expect("stopping the worker");
     tokio::time::timeout(Duration::from_secs(5), worker)
@@ -170,6 +143,404 @@ async fn durable_threads_subject_commits_then_reports_and_acknowledges() {
         .expect("the worker stops")
         .expect("the worker task joins")
         .expect("the worker exits cleanly");
+    database
+        .cleanup()
+        .await
+        .expect("dropping the test database");
+}
+
+/// Inserts one outbox row whose payload carries only a marker, so a test can recognise its own
+/// messages among those of the other tests sharing the broker.
+#[expect(
+    clippy::expect_used,
+    reason = "fixture helper: an unanswered insert is the failure"
+)]
+async fn insert_outbox_row(
+    pool: &sqlx::PgPool,
+    event_type: &str,
+    payload: serde_json::Value,
+    age_seconds: i32,
+) -> Uuid {
+    let event_id = Uuid::now_v7();
+    sqlx::query(
+        "insert into threads_archive.outbox_events \
+         (event_id, event_type, aggregate_type, aggregate_id, payload, occurred_at) \
+         values ($1, $2, 'capture', $3, $4, now() - ($5::int * interval '1 second'))",
+    )
+    .bind(event_id)
+    .bind(event_type)
+    .bind(Uuid::now_v7())
+    .bind(payload)
+    .bind(age_seconds)
+    .execute(pool)
+    .await
+    .expect("the outbox row inserts");
+    event_id
+}
+
+/// Collects the `Nats-Msg-Id` of every wanted message that reaches `subscription`, in arrival
+/// order, until all of `wanted` were seen.
+#[expect(
+    clippy::expect_used,
+    reason = "test helper: a missing message is the failure under test"
+)]
+async fn wait_for_messages(
+    subscription: &mut async_nats::Subscriber,
+    wanted: &[Uuid],
+) -> Vec<Uuid> {
+    let mut seen = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while wanted.iter().any(|id| !seen.contains(id)) {
+        let received = tokio::time::timeout_at(deadline, subscription.next()).await;
+        assert!(
+            received.is_ok(),
+            "timed out waiting for {wanted:?}; saw {seen:?}"
+        );
+        let message = received
+            .ok()
+            .flatten()
+            .expect("the subscription stays open");
+        let id = message
+            .headers
+            .as_ref()
+            .and_then(|headers| headers.get("Nats-Msg-Id"))
+            .and_then(|value| value.as_str().parse::<Uuid>().ok())
+            .expect("every relayed fact carries its event id");
+        if wanted.contains(&id) {
+            seen.push(id);
+        }
+    }
+    seen
+}
+
+#[tokio::test]
+async fn removal_row_is_published_and_later_rows_are_not_blocked() {
+    let _broker = BROKER.lock().await;
+    let database = TestDatabase::create().await.expect("a test database");
+    let client = async_nats::connect(nats_url())
+        .await
+        .expect("the isolated NATS broker is reachable");
+    let context = async_nats::jetstream::new(client.clone());
+    let _commands = provision(&context).await;
+    let mut facts = client
+        .subscribe("evt.social.source.>")
+        .await
+        .expect("subscribing before the relay starts");
+
+    let pool = database.database.pool();
+    let removed = insert_outbox_row(
+        pool,
+        "social.source.removed.v1",
+        serde_json::json!({"marker": "removed"}),
+        2,
+    )
+    .await;
+    let captured = insert_outbox_row(
+        pool,
+        "social.source.captured.v1",
+        serde_json::json!({"marker": "captured"}),
+        1,
+    )
+    .await;
+
+    let connection = NatsConnection::connect(&nats_url())
+        .await
+        .expect("the service role connects");
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let worker_database = database.database.clone();
+    let worker = tokio::spawn(async move {
+        nats::run(&connection, &worker_database, async move {
+            let _ignored = stop_rx.await;
+        })
+        .await
+    });
+
+    let seen = wait_for_messages(&mut facts, &[removed, captured]).await;
+    assert_eq!(
+        seen,
+        vec![removed, captured],
+        "the removal fact publishes first and does not stop the later fact"
+    );
+    let unpublished: i64 = sqlx::query_scalar(
+        "select count(*) from threads_archive.outbox_events where published_at is null",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("counting unpublished rows");
+    assert_eq!(
+        unpublished, 0,
+        "both rows are marked published after PubAck"
+    );
+
+    stop_tx.send(()).expect("stopping the worker");
+    tokio::time::timeout(Duration::from_secs(5), worker)
+        .await
+        .expect("the worker stops")
+        .expect("the worker task joins")
+        .expect("the worker exits cleanly");
+    database
+        .cleanup()
+        .await
+        .expect("dropping the test database");
+}
+
+#[tokio::test]
+async fn failing_head_row_backs_off_and_later_rows_still_publish() {
+    let _broker = BROKER.lock().await;
+    let database = TestDatabase::create().await.expect("a test database");
+    let client = async_nats::connect(nats_url())
+        .await
+        .expect("the isolated NATS broker is reachable");
+    let context = async_nats::jetstream::new(client.clone());
+    let _commands = provision(&context).await;
+    let mut facts = client
+        .subscribe("evt.social.source.>")
+        .await
+        .expect("subscribing before the relay starts");
+
+    // A payload beyond the broker's maximum is refused before it leaves the client: the cheapest
+    // deterministic publish failure that does not depend on a broker permission.
+    let pool = database.database.pool();
+    let poison = insert_outbox_row(
+        pool,
+        "social.source.captured.v1",
+        serde_json::json!({"marker": "x".repeat(2 * 1024 * 1024)}),
+        2,
+    )
+    .await;
+    let healthy = insert_outbox_row(
+        pool,
+        "social.source.updated.v1",
+        serde_json::json!({"marker": "healthy"}),
+        1,
+    )
+    .await;
+
+    let connection = NatsConnection::connect(&nats_url())
+        .await
+        .expect("the service role connects");
+    let worker_database = database.database.clone();
+    let worker = tokio::spawn(async move {
+        nats::run(&connection, &worker_database, std::future::pending()).await
+    });
+
+    let seen = wait_for_messages(&mut facts, &[healthy]).await;
+    assert_eq!(
+        seen,
+        vec![healthy],
+        "the row behind the failing one publishes"
+    );
+    let outcome = tokio::time::timeout(Duration::from_secs(5), worker)
+        .await
+        .expect("a failed publication stops the worker rather than being swallowed")
+        .expect("the worker task joins");
+    assert!(
+        outcome.is_err(),
+        "the worker surfaces the failed publication after the pass"
+    );
+
+    let (attempts, last_error, delayed, published): (i32, Option<String>, bool, bool) =
+        sqlx::query_as(
+            "select attempt_count, last_error, next_attempt_at > now(), published_at is not null \
+             from threads_archive.outbox_events where event_id = $1",
+        )
+        .bind(poison)
+        .fetch_one(pool)
+        .await
+        .expect("the failing row is still stored");
+    assert_eq!(attempts, 1, "the failure is counted");
+    assert_eq!(last_error.as_deref(), Some("publish_failed"));
+    assert!(
+        delayed,
+        "the failing row backs off instead of retrying immediately"
+    );
+    assert!(!published, "a failed publication is never marked published");
+
+    database
+        .cleanup()
+        .await
+        .expect("dropping the test database");
+}
+
+/// Waits for the first message on `subscription` whose JSON body satisfies `wanted`.
+#[expect(
+    clippy::expect_used,
+    reason = "test helper: a missing message is the failure under test"
+)]
+async fn next_matching(
+    subscription: &mut async_nats::Subscriber,
+    what: &str,
+    wanted: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let received = tokio::time::timeout_at(deadline, subscription.next()).await;
+        assert!(received.is_ok(), "timed out waiting for {what}");
+        let message = received
+            .ok()
+            .flatten()
+            .expect("the subscription stays open");
+        let body: serde_json::Value =
+            serde_json::from_slice(&message.payload).expect("every relayed fact is JSON");
+        if wanted(&body) {
+            return body;
+        }
+    }
+}
+
+/// The relay and the capture resolver running side by side, as the service runs them.
+struct Pipeline {
+    stop_bus: tokio::sync::oneshot::Sender<()>,
+    stop_resolver: tokio::sync::oneshot::Sender<()>,
+    bus: tokio::task::JoinHandle<Result<(), nats::NatsError>>,
+    resolution: tokio::task::JoinHandle<
+        Result<(), ratatoskr_threads_archive::capture_resolution::ResolverError>,
+    >,
+}
+
+impl Pipeline {
+    #[expect(
+        clippy::expect_used,
+        reason = "test helper: a pipeline that cannot start is the failure"
+    )]
+    async fn start(database: &TestDatabase, fake: &FakeOembed) -> Self {
+        let connection = NatsConnection::connect(&nats_url())
+            .await
+            .expect("the service role connects");
+        let raw_root =
+            std::env::temp_dir().join(format!("ratatoskr-threads-raw-{}", Uuid::now_v7()));
+        let resolver = CaptureResolver::new(
+            database.database.clone(),
+            ApprovedOembedClient::for_loopback_test(&fake.endpoint()).expect("a loopback endpoint"),
+            RawObjectStore::new(raw_root),
+            ResolverPolicy {
+                max_attempts: 5,
+                batch_size: 8,
+                poll_interval: Duration::from_millis(20),
+            },
+        );
+        let (stop_bus, bus_stopped) = tokio::sync::oneshot::channel::<()>();
+        let (stop_resolver, resolver_stopped) = tokio::sync::oneshot::channel::<()>();
+        let bus_database = database.database.clone();
+        let bus = tokio::spawn(async move {
+            nats::run(&connection, &bus_database, async move {
+                let _ignored = bus_stopped.await;
+            })
+            .await
+        });
+        let resolution = tokio::spawn(async move {
+            resolver
+                .run(async move {
+                    let _ignored = resolver_stopped.await;
+                })
+                .await
+        });
+        Self {
+            stop_bus,
+            stop_resolver,
+            bus,
+            resolution,
+        }
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "test helper: a worker that fails to stop cleanly is the failure"
+    )]
+    async fn stop(self) {
+        self.stop_bus.send(()).expect("stopping the relay");
+        self.stop_resolver.send(()).expect("stopping the resolver");
+        tokio::time::timeout(Duration::from_secs(5), self.bus)
+            .await
+            .expect("the relay stops")
+            .expect("the relay task joins")
+            .expect("the relay exits cleanly");
+        tokio::time::timeout(Duration::from_secs(5), self.resolution)
+            .await
+            .expect("the resolver stops")
+            .expect("the resolver task joins")
+            .expect("the resolver exits cleanly");
+    }
+}
+
+#[tokio::test]
+async fn command_to_terminal_report_and_source_fact() {
+    let _broker = BROKER.lock().await;
+    let database = TestDatabase::create().await.expect("a test database");
+    let client = async_nats::connect(nats_url())
+        .await
+        .expect("the isolated NATS broker is reachable");
+    let context = async_nats::jetstream::new(client.clone());
+    let _commands = provision(&context).await;
+    let mut reports = client
+        .subscribe("evt.platform.operation.reported.v1")
+        .await
+        .expect("subscribing to operation reports");
+    let mut facts = client
+        .subscribe("evt.social.source.captured.v1")
+        .await
+        .expect("subscribing to captured facts");
+
+    let fake = FakeOembed::start(PERMALINK, vec![FakeReply::Oembed])
+        .await
+        .expect("the fake oEmbed endpoint binds");
+    let pipeline = Pipeline::start(&database, &fake).await;
+
+    let command = threads_command(Uuid::now_v7());
+    let operation = command
+        .correlation_id
+        .to_string()
+        .trim_start_matches("operation:")
+        .to_owned();
+    let tenant = command
+        .tenant_id
+        .expect("the command names its tenant")
+        .to_string();
+    let published = context
+        .publish(
+            COMMAND_SUBJECT,
+            command
+                .to_canonical_json()
+                .expect("the command serializes")
+                .into(),
+        )
+        .await
+        .expect("publishing the command");
+    published.await.expect("the command is stored by JetStream");
+
+    let ours = |body: &serde_json::Value, status: &str| {
+        body["correlation_id"] == format!("operation:{operation}")
+            && body["payload"]["status"] == status
+    };
+    let queued = next_matching(&mut reports, "the queued report", |body| {
+        ours(body, "queued")
+    })
+    .await;
+    assert_eq!(queued["tenant_id"], tenant.as_str());
+    let captured = next_matching(&mut facts, "the captured source fact", |body| {
+        body["tenant_id"] == tenant.as_str()
+    })
+    .await;
+    assert_eq!(captured["event_type"], "social.source.captured.v1");
+    let terminal = next_matching(&mut reports, "the terminal report", |body| {
+        ours(body, "succeeded")
+    })
+    .await;
+    assert_eq!(terminal["tenant_id"], tenant.as_str());
+    assert_eq!(terminal["payload"]["stage"], "capture_preserved");
+    assert_eq!(
+        terminal["payload"]["results"][0]["target"],
+        format!(
+            "social_source:{}",
+            captured["payload"]["source"]["social_source_id"]
+                .as_str()
+                .expect("the fact names its source")
+        ),
+        "the report points at the source the fact announced"
+    );
+    assert_eq!(fake.requests(), 1);
+
+    pipeline.stop().await;
     database
         .cleanup()
         .await

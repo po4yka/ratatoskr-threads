@@ -324,7 +324,12 @@ create table threads_archive.captures (
     note               text,
     captured_at        timestamptz not null,
     next_resolution_at timestamptz,
+    operation_id          uuid,
+    command_id            uuid,
+    resolution_attempts   integer     not null default 0,
+    operation_reported_at timestamptz,
     created_at         timestamptz not null default now(),
+    constraint captures_resolution_attempts_check check (resolution_attempts >= 0),
     constraint captures_post_id_fkey foreign key (post_id)
         references threads_archive.posts (post_id),
     constraint captures_user_ref_idempotency_key_key unique (user_ref, idempotency_key),
@@ -346,6 +351,24 @@ create table threads_archive.captures (
 comment on table threads_archive.captures is
     'Explicit user captures. post_id stays open while the item is unresolved or unavailable. '
     'original_url preserves the submitted URL text byte-for-byte beside the canonical permalink.';
+
+comment on column threads_archive.captures.operation_id is
+    'The Platform operation a browser capture command started; null for captures that no '
+    'Platform operation waits for. Exactly one terminal report is queued per operation.';
+comment on column threads_archive.captures.command_id is
+    'The Platform command that started operation_id, the causation of every report.';
+comment on column threads_archive.captures.resolution_attempts is
+    'Transient public-resolution failures so far; the configured maximum ends in a terminal report.';
+comment on column threads_archive.captures.operation_reported_at is
+    'When the terminal report was queued. Set in the same statement that inserts the report, so '
+    'a redelivery or a crash can only report, never report twice.';
+
+-- The resolver claims the unreported operations that are due. The predicate stops at the
+-- reporting guard rather than at the accepted status, because a capture that was already
+-- recorded as resolved or unavailable but not yet reported must be claimed to be reported.
+create index captures_resolution_due_idx
+    on threads_archive.captures (next_resolution_at)
+    where operation_id is not null and operation_reported_at is null;
 
 comment on constraint captures_acquisition_method_check on threads_archive.captures is
     'How the capture reached this service. Closed vocabulary; enforced by the database. The '
@@ -539,12 +562,18 @@ create table threads_archive.outbox_events (
     published_at    timestamptz,
     attempt_count   integer     not null default 0,
     next_attempt_at timestamptz,
+    last_error      text,
     constraint outbox_events_aggregate_type_check
-        check (aggregate_type in ('capture', 'post', 'account', 'export_run'))
+        check (aggregate_type in ('capture', 'post', 'account', 'export_run')),
+    constraint outbox_events_event_type_check
+        check (event_type in ('platform.operation.reported.v1', 'social.source.captured.v1',
+                              'social.source.updated.v1', 'social.source.removed.v1'))
 );
 
 comment on table threads_archive.outbox_events is
-    'Transactional outbox. Rows become at-least-once publications; replay converges.';
+    'Transactional outbox. Rows become at-least-once publications; replay converges. event_type '
+    'is a closed list, one entry per subject the relay publishes to; last_error is a content-free '
+    'failure class.';
 
 create index outbox_events_unpublished_idx
     on threads_archive.outbox_events (next_attempt_at)

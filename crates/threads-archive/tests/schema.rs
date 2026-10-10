@@ -251,6 +251,49 @@ async fn unknown_acquisition_method_is_refused_by_named_check() {
 }
 
 #[tokio::test]
+async fn outbox_refuses_unlisted_event_types() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let pool = test.database.pool();
+    let insert = "insert into threads_archive.outbox_events \
+         (event_id, event_type, aggregate_type, aggregate_id, payload, occurred_at) \
+         values ($1, $2, 'capture', $3, '{}'::jsonb, now())";
+
+    for listed in [
+        "platform.operation.reported.v1",
+        "social.source.captured.v1",
+        "social.source.updated.v1",
+        "social.source.removed.v1",
+    ] {
+        let inserted = sqlx::query(insert)
+            .bind(Uuid::now_v7())
+            .bind(listed)
+            .bind(Uuid::now_v7())
+            .execute(pool)
+            .await;
+        assert!(
+            inserted.is_ok(),
+            "listed type {listed} must insert: {:?}",
+            inserted.err().map(|error| error.to_string())
+        );
+    }
+    let refused = sqlx::query(insert)
+        .bind(Uuid::now_v7())
+        .bind("social.source.deleted.v1")
+        .bind(Uuid::now_v7())
+        .execute(pool)
+        .await
+        .expect_err("an event type outside the relay's closed list must be unstorable");
+    assert!(
+        refused
+            .to_string()
+            .contains("outbox_events_event_type_check"),
+        "the named CHECK constraint must reject it: {refused}"
+    );
+
+    test.cleanup().await.expect("cleanup must drop");
+}
+
+#[tokio::test]
 async fn every_documented_authority_value_inserts_including_explicit_user_capture() {
     let test = TestDatabase::create().await.expect("a fresh test database");
     let pool = test.database.pool();

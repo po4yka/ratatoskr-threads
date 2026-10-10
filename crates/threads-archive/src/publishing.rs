@@ -121,6 +121,22 @@ pub(crate) async fn append_export_fact(
     .await
 }
 
+/// The stored library identity of `post_id` for `owner`, once a fact for it was appended.
+pub(crate) async fn social_source_id_for(
+    connection: &mut PgConnection,
+    owner: Uuid,
+    post_id: Uuid,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    sqlx::query_scalar(
+        "select social_source_id from threads_archive.social_sources \
+         where user_ref = $1 and post_id = $2",
+    )
+    .bind(owner)
+    .bind(post_id)
+    .fetch_optional(connection)
+    .await
+}
+
 /// Appends one content-free local-library removal fact inside the caller's transaction.
 pub(crate) async fn append_removal(
     connection: &mut PgConnection,
