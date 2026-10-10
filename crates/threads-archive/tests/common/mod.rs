@@ -16,11 +16,22 @@ use uuid::Uuid;
 pub(crate) const PERMALINK: &str = "https://www.threads.net/@author/post/AbCd1";
 
 /// A Platform `social.capture.requested.v1` command for Threads, owned by a fresh tenant.
+pub(crate) fn threads_command(operation: Uuid) -> CommandEnvelope {
+    command_with(operation, PERMALINK, SocialCaptureProvider::Threads)
+}
+
+/// A Platform `social.capture.requested.v1` command naming `permalink` and `provider`.
+///
+/// The contract only requires an `https` link, so `permalink` may be one this service cannot map.
 #[expect(
     clippy::expect_used,
     reason = "fixture helper: every constructed fragment is static and contract-valid"
 )]
-pub(crate) fn threads_command(operation: Uuid) -> CommandEnvelope {
+pub(crate) fn command_with(
+    operation: Uuid,
+    permalink: &str,
+    provider: SocialCaptureProvider,
+) -> CommandEnvelope {
     let payload = SocialCaptureRequested {
         operation_id: OperationId(operation),
         idempotency_key: ContentDigest {
@@ -28,9 +39,9 @@ pub(crate) fn threads_command(operation: Uuid) -> CommandEnvelope {
             hex: DigestHex::parse(&operation.simple().to_string().repeat(2))
                 .expect("a SHA-256 digest"),
         },
-        original_permalink: PostPermalink::parse(PERMALINK).expect("a permalink"),
+        original_permalink: PostPermalink::parse(permalink).expect("a permalink"),
         captured_at: WireTimestamp::now(), // wall-clock: opaque fixture value, only round-tripped
-        provider: SocialCaptureProvider::Threads,
+        provider,
         acquisition: AcquisitionMethod::BrowserExtension,
         saved_authority: SavedAuthority::ExplicitUserCapture,
         extensions: Extensions::new(),

@@ -380,3 +380,36 @@ async fn a_crash_between_recording_and_reporting_only_reports() {
     );
     harness.database.cleanup().await.expect("cleanup");
 }
+
+#[tokio::test]
+async fn a_resolved_capture_whose_source_is_gone_is_reported_instead_of_stopping_the_resolver() {
+    let harness = harness(vec![FakeReply::Oembed]).await;
+    let pool = harness.pool();
+
+    // The capture says it was resolved, but the post it points at no longer exists (for example
+    // after an owner deletion). Reporting it must not depend on a source that cannot be read.
+    sqlx::query(
+        "update threads_archive.captures set status = 'resolved', post_id = null \
+         where capture_id = $1",
+    )
+    .bind(harness.capture_id)
+    .execute(pool)
+    .await
+    .expect("orphaning the resolved capture");
+
+    assert_eq!(run_at(&harness, Utc::now()).await, (1, 1));
+
+    let terminal = terminal_reports(pool).await;
+    assert_eq!(terminal.len(), 1, "the operation is not left waiting");
+    let payload = &terminal[0]["payload"];
+    assert_eq!(payload["status"], "failed");
+    assert_eq!(payload["error"]["code"], "social.source.unavailable");
+    assert_eq!(payload["error"]["retryable"], false);
+    assert_eq!(
+        run_at(&harness, Utc::now() + Duration::hours(2)).await,
+        (0, 0),
+        "the poison capture does not come back"
+    );
+    assert_eq!(harness.fake.requests(), 0, "nothing is fetched for it");
+    harness.database.cleanup().await.expect("cleanup");
+}

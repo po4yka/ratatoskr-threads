@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use futures_util::StreamExt as _;
+use ratatoskr_social_contracts::SocialCaptureProvider;
 use ratatoskr_threads_archive::capture_resolution::{CaptureResolver, ResolverPolicy};
 use ratatoskr_threads_archive::nats::{
     self, COMMAND_STREAM, COMMAND_SUBJECT, CONSUMER_NAME, NatsConnection,
@@ -14,7 +15,7 @@ use uuid::Uuid;
 
 mod common;
 
-use common::{PERMALINK, threads_command};
+use common::{PERMALINK, command_with, threads_command};
 
 /// Every test here runs the real worker against the one durable consumer of the shared broker, so
 /// two of them at once would steal each other's commands.
@@ -541,6 +542,278 @@ async fn command_to_terminal_report_and_source_fact() {
     assert_eq!(fake.requests(), 1);
 
     pipeline.stop().await;
+    database
+        .cleanup()
+        .await
+        .expect("dropping the test database");
+}
+
+/// A permalink the contract accepts (any `https` link) that Threads cannot map to a post.
+const UNSUPPORTED_PERMALINK: &str = "https://example.com/@author/post/AbCd1";
+
+/// Starts only the bus worker, the way the service runs it beside the resolver.
+struct BusWorker {
+    stop: tokio::sync::oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<Result<(), nats::NatsError>>,
+}
+
+impl BusWorker {
+    #[expect(
+        clippy::expect_used,
+        reason = "test helper: a worker that cannot start is the failure"
+    )]
+    async fn start(database: &TestDatabase) -> Self {
+        let connection = NatsConnection::connect(&nats_url())
+            .await
+            .expect("the service role connects");
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let worker_database = database.database.clone();
+        let task = tokio::spawn(async move {
+            nats::run(&connection, &worker_database, async move {
+                let _ignored = stopped.await;
+            })
+            .await
+        });
+        Self { stop, task }
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "test helper: a worker that fails to stop cleanly is the failure"
+    )]
+    async fn stop(self) {
+        self.stop.send(()).expect("stopping the worker");
+        tokio::time::timeout(Duration::from_secs(5), self.task)
+            .await
+            .expect("the worker stops")
+            .expect("the worker task joins")
+            .expect("the worker exits cleanly");
+    }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "test helper: an unstored command is the failure"
+)]
+async fn publish_command(
+    context: &async_nats::jetstream::Context,
+    command: &ratatoskr_event_envelope::CommandEnvelope,
+) {
+    context
+        .publish(
+            COMMAND_SUBJECT,
+            command
+                .to_canonical_json()
+                .expect("the command serializes")
+                .into(),
+        )
+        .await
+        .expect("publishing the command")
+        .await
+        .expect("the command is stored by JetStream");
+}
+
+#[tokio::test]
+async fn rejected_but_attributable_command_gets_one_failed_report() {
+    let _broker = BROKER.lock().await;
+    let database = TestDatabase::create().await.expect("a test database");
+    let client = async_nats::connect(nats_url())
+        .await
+        .expect("the isolated NATS broker is reachable");
+    let context = async_nats::jetstream::new(client.clone());
+    let commands = provision(&context).await;
+    let mut reports = client
+        .subscribe("evt.platform.operation.reported.v1")
+        .await
+        .expect("subscribing to operation reports");
+    let worker = BusWorker::start(&database).await;
+
+    let command = command_with(
+        Uuid::now_v7(),
+        UNSUPPORTED_PERMALINK,
+        SocialCaptureProvider::Threads,
+    );
+    let operation = command
+        .correlation_id
+        .to_string()
+        .trim_start_matches("operation:")
+        .to_owned();
+    let tenant = command
+        .tenant_id
+        .expect("the command names its tenant")
+        .to_string();
+    publish_command(&context, &command).await;
+
+    let report = next_matching(&mut reports, "the failed report", |body| {
+        body["correlation_id"] == format!("operation:{operation}")
+    })
+    .await;
+    assert_eq!(report["tenant_id"], tenant.as_str());
+    assert_eq!(
+        report["causation_id"],
+        format!("command:{}", command.command_id.0)
+    );
+    assert_eq!(report["payload"]["status"], "failed");
+    assert_eq!(report["payload"]["stage"], "capture_unavailable");
+    assert_eq!(
+        report["payload"]["error"]["code"],
+        "social.source.unavailable"
+    );
+    assert_eq!(report["payload"]["error"]["retryable"], false);
+
+    // The same command arriving again (a redelivery after a lost ack) adds nothing.
+    publish_command(&context, &command).await;
+    let again = tokio::time::timeout(Duration::from_millis(1_500), async {
+        loop {
+            let message = reports.next().await?;
+            let body: serde_json::Value = serde_json::from_slice(&message.payload).ok()?;
+            if body["correlation_id"] == format!("operation:{operation}") {
+                return Some(body);
+            }
+        }
+    })
+    .await;
+    assert!(
+        again.is_err(),
+        "a redelivered rejection reports nothing more"
+    );
+    let stored: i64 = sqlx::query_scalar(
+        "select count(*) from threads_archive.outbox_events \
+         where event_type = 'platform.operation.reported.v1'",
+    )
+    .fetch_one(database.database.pool())
+    .await
+    .expect("counting reports");
+    let rejected: i64 = sqlx::query_scalar(
+        "select count(*) from threads_archive.inbox_events where handler_outcome = 'rejected'",
+    )
+    .fetch_one(database.database.pool())
+    .await
+    .expect("counting rejections");
+    let captures: i64 = sqlx::query_scalar("select count(*) from threads_archive.captures")
+        .fetch_one(database.database.pool())
+        .await
+        .expect("counting captures");
+    assert_eq!((stored, rejected, captures), (1, 1, 0));
+
+    let mut consumer = commands
+        .get_consumer::<async_nats::jetstream::consumer::pull::Config>(CONSUMER_NAME)
+        .await
+        .expect("reading the preprovisioned consumer");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let counts = loop {
+        let info = consumer.info().await.expect("reading consumer state");
+        let counts = (info.num_pending, info.num_ack_pending);
+        if counts == (0, 0) || tokio::time::Instant::now() >= deadline {
+            break counts;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(counts, (0, 0), "both deliveries were settled");
+
+    worker.stop().await;
+    database
+        .cleanup()
+        .await
+        .expect("dropping the test database");
+}
+
+#[tokio::test]
+async fn unattributable_commands_are_terminated_without_a_report() {
+    let _broker = BROKER.lock().await;
+    let database = TestDatabase::create().await.expect("a test database");
+    let client = async_nats::connect(nats_url())
+        .await
+        .expect("the isolated NATS broker is reachable");
+    let context = async_nats::jetstream::new(client.clone());
+    let _commands = provision(&context).await;
+    let mut terminated = client
+        .subscribe(format!(
+            "$JS.EVENT.ADVISORY.CONSUMER.MSG_TERMINATED.{COMMAND_STREAM}.{CONSUMER_NAME}"
+        ))
+        .await
+        .expect("subscribing to termination advisories");
+    let worker = BusWorker::start(&database).await;
+
+    context
+        .publish(COMMAND_SUBJECT, "{\"not\":\"an envelope\"}".into())
+        .await
+        .expect("publishing garbage")
+        .await
+        .expect("the garbage is stored by JetStream");
+    publish_command(
+        &context,
+        &command_with(Uuid::now_v7(), PERMALINK, SocialCaptureProvider::Instagram),
+    )
+    .await;
+
+    for what in ["the undecodable command", "the wrong-provider command"] {
+        let advisory = tokio::time::timeout(Duration::from_secs(10), terminated.next()).await;
+        assert!(
+            advisory.is_ok_and(|message| message.is_some()),
+            "{what} is terminated, not acknowledged"
+        );
+    }
+    let reports: i64 = sqlx::query_scalar("select count(*) from threads_archive.outbox_events")
+        .fetch_one(database.database.pool())
+        .await
+        .expect("counting outbox rows");
+    assert_eq!(
+        reports, 0,
+        "nothing is attributable, so nothing is reported"
+    );
+
+    worker.stop().await;
+    database
+        .cleanup()
+        .await
+        .expect("dropping the test database");
+}
+
+#[tokio::test]
+async fn a_failing_inbox_write_naks_and_the_command_completes_on_redelivery() {
+    let _broker = BROKER.lock().await;
+    let database = TestDatabase::create().await.expect("a test database");
+    let client = async_nats::connect(nats_url())
+        .await
+        .expect("the isolated NATS broker is reachable");
+    let context = async_nats::jetstream::new(client.clone());
+    let _commands = provision(&context).await;
+    let mut reports = client
+        .subscribe("evt.platform.operation.reported.v1")
+        .await
+        .expect("subscribing to operation reports");
+    let worker = BusWorker::start(&database).await;
+    let pool = database.database.pool();
+
+    sqlx::query("alter table threads_archive.inbox_events rename to inbox_events_offline")
+        .execute(pool)
+        .await
+        .expect("taking the inbox offline");
+    let command = threads_command(Uuid::now_v7());
+    let operation = command
+        .correlation_id
+        .to_string()
+        .trim_start_matches("operation:")
+        .to_owned();
+    publish_command(&context, &command).await;
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    assert!(
+        !worker.task.is_finished(),
+        "a transient inbox failure must not end the worker"
+    );
+
+    sqlx::query("alter table threads_archive.inbox_events_offline rename to inbox_events")
+        .execute(pool)
+        .await
+        .expect("bringing the inbox back");
+    let queued = next_matching(&mut reports, "the queued report after redelivery", |body| {
+        body["correlation_id"] == format!("operation:{operation}")
+    })
+    .await;
+    assert_eq!(queued["payload"]["status"], "queued");
+
+    worker.stop().await;
     database
         .cleanup()
         .await
