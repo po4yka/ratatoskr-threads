@@ -276,3 +276,46 @@ fn post_codes_up_to_128_characters_are_accepted_and_longer_refused() {
         PermalinkError::PostCodeGrammar
     );
 }
+
+/// XR-021 CONTRACTS.md section R3-15 rule 3: the Threads grammar row of the shared table is
+/// `^/@[A-Za-z0-9._]{1,30}/post/[A-Za-z0-9_-]{1,128}/?$` on the four approved hosts. This pins
+/// behaviour that already held; every host is checked at both edges, which the two single-host
+/// tests above do not do.
+#[test]
+fn the_boundary_lengths_of_the_shared_grammar_table() {
+    let hosts = [
+        "threads.net",
+        "www.threads.net",
+        "threads.com",
+        "www.threads.com",
+    ];
+    let handle_at_limit = "h".repeat(30);
+    let code_at_limit = "c".repeat(128);
+    for host in hosts {
+        let accepted = try_canonicalize(&format!(
+            "https://{host}/@{handle_at_limit}/post/{code_at_limit}"
+        ))
+        .expect("a 30-character handle and a 128-character code are inside the grammar");
+        assert_eq!(
+            accepted.permalink().as_str(),
+            format!("https://www.threads.net/@{handle_at_limit}/post/{code_at_limit}"),
+            "{host} canonicalizes at the limits"
+        );
+        assert_eq!(
+            refusal(&format!(
+                "https://{host}/@{}/post/{code_at_limit}",
+                "h".repeat(31)
+            )),
+            PermalinkError::HandleGrammar,
+            "{host} refuses a 31-character handle"
+        );
+        assert_eq!(
+            refusal(&format!(
+                "https://{host}/@{handle_at_limit}/post/{}",
+                "c".repeat(129)
+            )),
+            PermalinkError::PostCodeGrammar,
+            "{host} refuses a 129-character code"
+        );
+    }
+}

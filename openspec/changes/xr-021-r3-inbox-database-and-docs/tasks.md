@@ -10,7 +10,7 @@
 
 ## 3. Grammar boundary (R3-15)
 
-- [ ] 3.1 This pins behaviour that already holds, so it cannot start from a failing test: add `crates/threads-archive/tests/permalink.rs::the_boundary_lengths_of_the_shared_grammar_table`.
+- [x] 3.1 This pins behaviour that already holds, so it cannot start from a failing test: add `crates/threads-archive/tests/permalink.rs::the_boundary_lengths_of_the_shared_grammar_table`.
 
 ## 4. Documentation (R3-19)
 
