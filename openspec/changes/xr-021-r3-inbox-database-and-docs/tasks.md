@@ -14,4 +14,4 @@
 
 ## 4. Documentation (R3-19)
 
-- [ ] 4.1 Documentation, no failing test can precede it: rewrite the README "Workspace integration" paragraph from the workspace as it is.
+- [x] 4.1 Documentation, no failing test can precede it: rewrite the README "Workspace integration" paragraph from the workspace as it is.

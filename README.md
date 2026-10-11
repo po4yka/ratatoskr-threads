@@ -360,7 +360,7 @@ Every operation records acquisition method, authority, resolver/parser version, 
 
 ## Workspace integration
 
-Planned: `ratatoskr-workspace` will pin Threads with compatible social contracts, Platform, Mobile, Browser Extension, Extractor, Knowledge, and clients. No workspace pin or integration profile exists for this service today. The connector will remain independently testable using mock OAuth/API servers, public-resolution fixtures, and synthetic export archives.
+`ratatoskr-workspace` pins this service (`workspace.toml` entry `threads` in the `social` profile, with the commit in `workspace.lock`) and its harness checks it against the rest of the fleet: the operator listener `9084` in the port allocation table, the Threads stanza and the Edge-provisioned durable `threads_browser_capture` in the bus ACL and durable checks. No composed Compose profile starts this service, and no cross-service run covering it has been recorded: the social-capture flow of the native smoke of changeset XR-021 is not reported as run, so the hops from the browser extension through Platform to this service, and from its facts to Knowledge, rest on this repository's own broker and database tests. Those include the authorized-broker test `crates/threads-archive/tests/nats_inbox_prefix.rs`, which runs the shipped `deploy/nats/identity.conf` stanza on a private broker. The official OAuth, own-account synchronization, Data Export import and publishing capabilities are covered only by recorded provider fixtures, mock servers and synthetic archives, and the public oEmbed success path is live-only because the endpoint is allow-listed to Meta hosts.
 
 ## Project status
 
