@@ -21,6 +21,10 @@ pub const COMMAND_STREAM: &str = "ratatoskr_commands";
 pub const COMMAND_SUBJECT: &str = "cmd.threads.capture.requested.v1";
 /// Durable cursor name for this provider command handler.
 pub const CONSUMER_NAME: &str = "threads_browser_capture";
+/// The inbox prefix of the Threads identity: the one subject tree its stanza in the deployed ACL
+/// lets it subscribe to (`subscribe.allow = ["_INBOX_threads.>"]`). Every `JetStream` reply reaches
+/// the service on a subject under it, so a connection without the prefix never receives one.
+pub const INBOX_PREFIX: &str = "_INBOX_threads";
 const OUTBOX_BATCH_SIZE: i64 = 32;
 const OUTBOX_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const OPERATION_REPORT_SUBJECT: &str = "evt.platform.operation.reported.v1";
@@ -50,7 +54,9 @@ impl NatsConnection {
     ///
     /// Returns [`NatsError`] when NATS refuses the connection.
     pub async fn connect(url: &str) -> Result<Self, NatsError> {
-        let client = async_nats::connect(url)
+        let client = async_nats::ConnectOptions::new()
+            .custom_inbox_prefix(INBOX_PREFIX)
+            .connect(url)
             .await
             .map_err(|error| NatsError::Bus(error.to_string()))?;
         Ok(Self {
@@ -68,6 +74,7 @@ impl NatsConnection {
     pub async fn connect_with_nkey(url: &str, seed_path: &Path) -> Result<Self, NatsError> {
         let seed = std::fs::read_to_string(seed_path).map_err(NatsError::Credential)?;
         let client = async_nats::ConnectOptions::with_nkey(seed.trim().to_owned())
+            .custom_inbox_prefix(INBOX_PREFIX)
             .connect(url)
             .await
             .map_err(|error| NatsError::Bus(error.to_string()))?;

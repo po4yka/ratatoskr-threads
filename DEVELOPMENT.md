@@ -67,6 +67,12 @@ suite creates disposable databases from the embedded schema per test; without th
 fails rather than skips. CI additionally runs the 850-line file ratchet and a guard asserting this
 command list is byte-identical to `.github/workflows/ci.yml`.
 
+`crates/threads-archive/tests/nats_inbox_prefix.rs` starts its own authorization-enabled broker from
+the shipped stanza `deploy/nats/identity.conf` (the service connects under the inbox prefix
+`_INBOX_threads`, XR-021 CONTRACTS.md section R3-01), so `nats-server` must be on `PATH`. CI copies
+it out of the NATS container it starts (the "Put nats-server on PATH" step); locally, install it or
+put the binary from `nats:2-alpine` on `PATH`. A missing binary fails the test.
+
 ## Local run
 
 ```bash

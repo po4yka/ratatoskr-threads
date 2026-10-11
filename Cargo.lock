@@ -2024,6 +2024,7 @@ dependencies = [
  "getrandom 0.4.3",
  "metrics",
  "metrics-exporter-prometheus",
+ "nkeys",
  "ratatoskr-event-envelope",
  "ratatoskr-identifiers",
  "ratatoskr-operation-contracts",

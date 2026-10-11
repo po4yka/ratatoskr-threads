@@ -36,6 +36,7 @@ zip.workspace = true
 test-support = []
 
 [dev-dependencies]
+nkeys.workspace = true
 ratatoskr-threads-archive = { path = ".", features = ["test-support"] }
 
 [lints]

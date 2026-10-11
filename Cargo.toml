@@ -28,6 +28,7 @@ ratatoskr-operation-contracts = { git = "https://github.com/po4yka/ratatoskr-con
 tokio      = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
 axum       = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 async-nats    = "0.50.0"
+nkeys         = "0.4.5"
 futures-util = "0.3.34"
 tower      = { version = "0.5.3", features = ["util"] }
 http-body-util = "0.1.5"
