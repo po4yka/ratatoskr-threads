@@ -79,6 +79,8 @@ cargo run -p ratatoskr-threads-archive-service
 required to start; `<binary> check-config` validates configuration without binding (exit 78 when
 invalid).
 
+A deployment starts from `deploy/systemd/threads.conf.example`, a systemd `EnvironmentFile` that states the operator listener, the database, the bus URL and nkey seed path, and the public-resolution keys. `services/threads-archive/tests/boot.rs::the_shipped_example_loads` loads it through the configuration loader, so it cannot drift from the keys the service accepts.
+
 Parser reprocessing is an explicit operator command:
 
 ```bash

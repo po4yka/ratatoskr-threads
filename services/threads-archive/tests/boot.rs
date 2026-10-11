@@ -375,3 +375,87 @@ async fn bus_worker_exit_flips_readiness_and_exit_code() {
     );
     test.cleanup().await.expect("cleanup drops");
 }
+
+/// The key/value pairs of a systemd `EnvironmentFile`: one `KEY=value` per line, `#` comments and
+/// blank lines skipped, no quoting.
+fn environment_file_entries(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect()
+}
+
+#[test]
+fn the_shipped_example_loads() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../deploy/systemd/threads.conf.example");
+    let text = std::fs::read_to_string(&path).expect("deploy/systemd/threads.conf.example ships");
+    let entries = environment_file_entries(&text);
+    let shipped = |key: &str| {
+        entries
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, value)| value.as_str())
+    };
+
+    // The values the loader would only see as "absolute", read from the shipped text itself.
+    assert_eq!(
+        shipped("RATATOSKR__BUS__NKEY_SEED_PATH"),
+        Some("/etc/ratatoskr/threads.nkey"),
+        "the seed lives at the path every service's table row names"
+    );
+    let database_url = shipped("RATATOSKR__STORAGE__DATABASE_URL").expect("the database is stated");
+    assert!(
+        database_url.contains(":CHANGE-ME@"),
+        "the secret is a placeholder"
+    );
+
+    // Substitute temporary locations for the paths a build machine does not have.
+    let scratch = std::env::temp_dir().join(format!(
+        "ratatoskr-threads-example-{}",
+        uuid::Uuid::now_v7()
+    ));
+    let seed = scratch.join("threads.nkey");
+    let raw_root = scratch.join("raw");
+    std::fs::create_dir_all(&raw_root).expect("a scratch directory");
+    std::fs::write(&seed, "SUA-placeholder-not-a-real-seed\n").expect("a scratch seed file");
+    let substituted: Vec<(String, String)> = entries
+        .iter()
+        .map(|(key, value)| {
+            let value = match key.as_str() {
+                "RATATOSKR__BUS__NKEY_SEED_PATH" => seed.display().to_string(),
+                "RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT" => raw_root.display().to_string(),
+                _ => value.clone(),
+            };
+            (key.clone(), value)
+        })
+        .collect();
+
+    let loaded = ratatoskr_threads_archive::Config::from_environment(substituted);
+    std::fs::remove_dir_all(&scratch).expect("the scratch directory is removed");
+    let config = loaded.expect("the shipped example is a valid configuration");
+
+    assert_eq!(config.admin.listen_address.to_string(), "127.0.0.1:9084");
+    assert!(
+        config.bus.url.starts_with("nats://"),
+        "the bus is configured"
+    );
+    assert_eq!(config.bus.nkey_seed_path.as_deref(), Some(seed.as_path()));
+    assert!(
+        config.storage.database_url.is_some(),
+        "the database is configured"
+    );
+    assert_eq!(
+        config.public_resolution.oembed_endpoint,
+        "https://graph.threads.com/oembed"
+    );
+    assert_eq!(
+        config.public_resolution.raw_object_root.as_deref(),
+        Some(raw_root.as_path())
+    );
+    assert_eq!(config.public_resolution.max_attempts, 5);
+    assert_eq!(config.public_resolution.batch_size, 8);
+    assert_eq!(config.public_resolution.poll_interval_ms, 2_000);
+}

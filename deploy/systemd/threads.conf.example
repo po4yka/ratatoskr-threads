@@ -1,0 +1,19 @@
+# /etc/ratatoskr/threads.conf, root:ratatoskr-threads 0640. systemd reads it as root and hands the values to the service process, so no secret is world-readable or on a command line. The file is a systemd EnvironmentFile: one KEY=value per line, no quoting.
+
+# The operator plane (/health/live, /health/ready, /metrics, /version). It binds loopback only and the service refuses any other address. The port is the allocation in the workspace docs/DEPLOYMENT_TARGET.md.
+RATATOSKR__ADMIN__LISTEN_ADDRESS=127.0.0.1:9084
+
+# The archive database. Replace CHANGE-ME with the role's password; the schema is applied by the service itself.
+RATATOSKR__STORAGE__DATABASE_URL=postgres://ratatoskr_threads:CHANGE-ME@127.0.0.1:5432/ratatoskr_threads
+
+# The explicit-capture lane needs the bus: the browser-capture command consumer, the outbox relay and the capture resolver all start from it, and the service refuses to start without a bus URL. The URL carries no credential; the identity is the nkey seed in the file below (root:ratatoskr-threads 0440).
+RATATOSKR__BUS__URL=nats://127.0.0.1:4222
+RATATOSKR__BUS__NKEY_SEED_PATH=/etc/ratatoskr/threads.nkey
+
+# A configured bus requires the public-resolution surface, or the process exits 78. Threads resolves a post through the credential-free oEmbed endpoint, so there is no token to provision. The endpoint must be the approved https host below. The raw-evidence directory is an absolute path that the service user can write; the unit's StateDirectory= or ReadWritePaths= must cover it.
+RATATOSKR__PUBLIC_RESOLUTION__OEMBED_ENDPOINT=https://graph.threads.com/oembed
+RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT=/var/lib/ratatoskr-threads/raw
+# Transient provider failures are retried up to this many attempts (30 s, 2 min, 8 min, 30 min between them) before the operation is reported unavailable. These are the defaults, stated so a deployment can see them.
+RATATOSKR__PUBLIC_RESOLUTION__MAX_ATTEMPTS=5
+RATATOSKR__PUBLIC_RESOLUTION__BATCH_SIZE=8
+RATATOSKR__PUBLIC_RESOLUTION__POLL_INTERVAL_MS=2000
