@@ -406,10 +406,27 @@ fn the_shipped_example_loads() {
         Some("/etc/ratatoskr/threads.nkey"),
         "the seed lives at the path every service's table row names"
     );
-    let database_url = shipped("RATATOSKR__STORAGE__DATABASE_URL").expect("the database is stated");
+    assert_eq!(
+        shipped("RATATOSKR__STORAGE__DATABASE_URL"),
+        Some("postgres://ratatoskr_threads:CHANGE-ME@127.0.0.1:5432/ratatoskr"),
+        "the service connects as its own role to the one shared database, and the secret is a placeholder"
+    );
+    assert_eq!(
+        shipped("RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT"),
+        Some("/mnt/nvme/ratatoskr/blobs/ratatoskr-threads"),
+        "durable raw evidence lives on NVMe, not on the boot device"
+    );
+    let role_file = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/postgres/role.sql"),
+    )
+    .expect("deploy/postgres/role.sql ships");
     assert!(
-        database_url.contains(":CHANGE-ME@"),
-        "the secret is a placeholder"
+        role_file.contains("create role ratatoskr_threads login;"),
+        "the role file creates the role the example names"
+    );
+    assert!(
+        role_file.contains("grant connect, create on database ratatoskr to ratatoskr_threads;"),
+        "the role may connect to and create its schema in the shared database"
     );
 
     // Substitute temporary locations for the paths a build machine does not have.

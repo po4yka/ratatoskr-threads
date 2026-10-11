@@ -301,6 +301,10 @@ article partial outcomes. Those require a supported public-resolution or
 Extractor observation and remain the responsibility of those authoritative
 pipelines.
 
+### Deployment
+
+The host runs one PostgreSQL database, `ratatoskr`, and every service connects to it as its own role. Provision this service in this order: Platform's `01-database-and-roles.sql`, the first Edge start, Platform's `02-grants.sql`, then `deploy/postgres/role.sql` of this repository as a PostgreSQL administrator (it creates `ratatoskr_threads` without a password, with `connect` and `create` on `ratatoskr`; set the password with `\password ratatoskr_threads`). The service creates its `threads_archive` schema from `schema.sql` at start. Raw evidence is durable state, so its directory lives on the NVMe volume rather than the boot device: create it with `install -d -o ratatoskr-threads -m 0750 /mnt/nvme/ratatoskr/blobs/ratatoskr-threads` before the first start. Then place the nkey seed at `/etc/ratatoskr/threads.nkey`, `/etc/ratatoskr/threads.conf` from `deploy/systemd/threads.conf.example`, and the public key of the Threads stanza (`deploy/nats/identity.conf` is this service's copy of it) in the NATS `authorization.users` list. The stanza lets the identity subscribe only to `_INBOX_threads.>`, so `NatsConnection` sets the inbox prefix `_INBOX_threads` on both of its constructors; a build without the prefix cannot complete a JetStream request under that ACL, so reload NATS and deploy the services of one snapshot together. The development `compose.yaml` keeps its own database, `threads`, as a laptop convenience.
+
 ## Security invariants
 
 1. No Threads password or user browser cookie is collected.

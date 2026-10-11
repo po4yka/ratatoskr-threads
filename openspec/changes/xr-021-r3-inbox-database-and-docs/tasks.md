@@ -5,8 +5,8 @@
 
 ## 2. Shared database and NVMe raw root (R3-11)
 
-- [ ] 2.1 RED: extend `services/threads-archive/tests/boot.rs::the_shipped_example_loads` to expect the database URL `postgres://ratatoskr_threads:CHANGE-ME@127.0.0.1:5432/ratatoskr`, the raw root `/mnt/nvme/ratatoskr/blobs/ratatoskr-threads` and `deploy/postgres/role.sql` creating `ratatoskr_threads` with `connect, create` on `ratatoskr`; it fails today on the database name.
-- [ ] 2.2 GREEN: edit the example, add `deploy/postgres/role.sql`, add the README deployment paragraph.
+- [x] 2.1 RED: extend `services/threads-archive/tests/boot.rs::the_shipped_example_loads` to expect the database URL `postgres://ratatoskr_threads:CHANGE-ME@127.0.0.1:5432/ratatoskr`, the raw root `/mnt/nvme/ratatoskr/blobs/ratatoskr-threads` and `deploy/postgres/role.sql` creating `ratatoskr_threads` with `connect, create` on `ratatoskr`; it fails today on the database name.
+- [x] 2.2 GREEN: edit the example, add `deploy/postgres/role.sql`, add the README deployment paragraph.
 
 ## 3. Grammar boundary (R3-15)
 
