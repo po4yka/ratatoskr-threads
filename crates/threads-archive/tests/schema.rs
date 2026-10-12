@@ -294,6 +294,65 @@ async fn outbox_refuses_unlisted_event_types() {
 }
 
 #[tokio::test]
+async fn outbox_rows_start_unacknowledged_and_the_outcome_is_closed() {
+    let test = TestDatabase::create().await.expect("a fresh test database");
+    let pool = test.database.pool();
+    let event_id = Uuid::now_v7();
+    sqlx::query(
+        "insert into threads_archive.outbox_events \
+         (event_id, event_type, aggregate_type, aggregate_id, payload, occurred_at) \
+         values ($1, 'social.source.removed.v1', 'capture', $2, '{}'::jsonb, now())",
+    )
+    .bind(event_id)
+    .bind(Uuid::now_v7())
+    .execute(pool)
+    .await
+    .expect("a row inserts without the acknowledgement columns");
+
+    let (acknowledged, outcome, resend_count, next_resend): (bool, Option<String>, i32, bool) =
+        sqlx::query_as(
+            "select acknowledged_at is null, ack_outcome, resend_count, next_resend_at is null \
+             from threads_archive.outbox_events where event_id = $1",
+        )
+        .bind(event_id)
+        .fetch_one(pool)
+        .await
+        .expect("the row is stored");
+    assert!(
+        acknowledged && next_resend,
+        "a new row is unacknowledged and unarmed"
+    );
+    assert_eq!(outcome, None);
+    assert_eq!(resend_count, 0);
+
+    for allowed in ["applied", "refused"] {
+        sqlx::query(
+            "update threads_archive.outbox_events set ack_outcome = $2 where event_id = $1",
+        )
+        .bind(event_id)
+        .bind(allowed)
+        .execute(pool)
+        .await
+        .expect("a closed outcome is storable");
+    }
+    let refused = sqlx::query(
+        "update threads_archive.outbox_events set ack_outcome = 'ignored' where event_id = $1",
+    )
+    .bind(event_id)
+    .execute(pool)
+    .await
+    .expect_err("an outcome outside the closed list is refused");
+    assert!(
+        refused
+            .to_string()
+            .contains("outbox_events_ack_outcome_check"),
+        "the named CHECK constraint must reject it: {refused}"
+    );
+
+    test.cleanup().await.expect("cleanup must drop");
+}
+
+#[tokio::test]
 async fn every_documented_authority_value_inserts_including_explicit_user_capture() {
     let test = TestDatabase::create().await.expect("a fresh test database");
     let pool = test.database.pool();

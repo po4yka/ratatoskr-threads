@@ -17,3 +17,7 @@ RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT=/mnt/nvme/ratatoskr/blobs/ratatosk
 RATATOSKR__PUBLIC_RESOLUTION__MAX_ATTEMPTS=5
 RATATOSKR__PUBLIC_RESOLUTION__BATCH_SIZE=8
 RATATOSKR__PUBLIC_RESOLUTION__POLL_INTERVAL_MS=2000
+
+# A removal fact (`social.source.removed.v1`) is kept and published again until Knowledge acknowledges it, because the events stream drops its oldest messages after 7 days or at 1 GiB. The first copy follows this many seconds after the first publication and each later wait doubles up to the cap. The defaults are stated so a deployment can see them: 600 s (the stream collapses a repeated message id inside 120 s, so a shorter delay publishes nothing new) and 21600 s. The delay accepts 30 to 86400, the cap at least the delay and at most 604800.
+RATATOSKR__TOMBSTONE__RESEND_AFTER_SECONDS=600
+RATATOSKR__TOMBSTONE__RESEND_CAP_SECONDS=21600

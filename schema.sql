@@ -563,6 +563,12 @@ create table threads_archive.outbox_events (
     attempt_count   integer     not null default 0,
     next_attempt_at timestamptz,
     last_error      text,
+    acknowledged_at timestamptz,
+    ack_outcome     text,
+    resend_count    integer     not null default 0,
+    next_resend_at  timestamptz,
+    constraint outbox_events_ack_outcome_check
+        check (ack_outcome in ('applied', 'refused')),
     constraint outbox_events_aggregate_type_check
         check (aggregate_type in ('capture', 'operation', 'post', 'account', 'export_run')),
     constraint outbox_events_event_type_check
@@ -573,11 +579,18 @@ create table threads_archive.outbox_events (
 comment on table threads_archive.outbox_events is
     'Transactional outbox. Rows become at-least-once publications; replay converges. event_type '
     'is a closed list, one entry per subject the relay publishes to; last_error is a content-free '
-    'failure class.';
+    'failure class. Only social.source.removed.v1 rows use acknowledged_at, ack_outcome, '
+    'resend_count and next_resend_at: Knowledge acknowledges every applied or refused removal, '
+    'and the relay publishes the stored bytes again until it does (XR-021 CONTRACTS.md R5-11).';
 
 create index outbox_events_unpublished_idx
     on threads_archive.outbox_events (next_attempt_at)
     where published_at is null;
+
+create index outbox_events_resend_idx
+    on threads_archive.outbox_events (next_resend_at)
+    where published_at is not null and acknowledged_at is null
+      and event_type = 'social.source.removed.v1';
 
 -- ---------------------------------------------------------------------------------------------
 -- inbox_events

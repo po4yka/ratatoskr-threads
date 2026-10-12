@@ -19,6 +19,7 @@ use futures_util::StreamExt as _;
 use ratatoskr_threads_archive::nats::{
     self, COMMAND_STREAM, COMMAND_SUBJECT, CONSUMER_NAME, INBOX_PREFIX, NatsConnection,
 };
+use ratatoskr_threads_archive::removal_acknowledgement::ResendPolicy;
 use ratatoskr_threads_archive::test_support::TestDatabase;
 use uuid::Uuid;
 
@@ -167,9 +168,14 @@ async fn the_connection_completes_jetstream_requests_under_its_inbox_prefix() {
     let worker_database = database.database.clone();
     let worker_connection = connection.clone();
     let worker = tokio::spawn(async move {
-        nats::run(&worker_connection, &worker_database, async move {
-            let _ignored = stop_rx.await;
-        })
+        nats::run(
+            &worker_connection,
+            &worker_database,
+            ResendPolicy::default(),
+            async move {
+                let _ignored = stop_rx.await;
+            },
+        )
         .await
     });
 

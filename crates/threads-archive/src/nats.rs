@@ -9,10 +9,11 @@ use std::time::Duration;
 
 use async_nats::jetstream;
 use futures_util::StreamExt as _;
-use sqlx::PgPool;
 
 use crate::browser_capture_command::{BrowserCaptureCommand, Intake};
 use crate::browser_capture_inbox::{BrowserCaptureInbox, BrowserCaptureInboxError};
+use crate::outbox_relay::flush_outbox;
+use crate::removal_acknowledgement::ResendPolicy;
 use crate::{Database, PersistenceError};
 
 /// The fleet-owned command stream declared by Platform.
@@ -25,12 +26,7 @@ pub const CONSUMER_NAME: &str = "threads_browser_capture";
 /// lets it subscribe to (`subscribe.allow = ["_INBOX_threads.>"]`). Every `JetStream` reply reaches
 /// the service on a subject under it, so a connection without the prefix never receives one.
 pub const INBOX_PREFIX: &str = "_INBOX_threads";
-const OUTBOX_BATCH_SIZE: i64 = 32;
 const OUTBOX_POLL_INTERVAL: Duration = Duration::from_secs(1);
-const OPERATION_REPORT_SUBJECT: &str = "evt.platform.operation.reported.v1";
-const SOCIAL_CAPTURED_SUBJECT: &str = "evt.social.source.captured.v1";
-const SOCIAL_UPDATED_SUBJECT: &str = "evt.social.source.updated.v1";
-const SOCIAL_REMOVED_SUBJECT: &str = "evt.social.source.removed.v1";
 /// How long the broker connection may stay down before the worker gives up and the process is
 /// restarted by its supervisor.
 const DISCONNECT_GRACE: Duration = Duration::from_secs(5);
@@ -142,7 +138,10 @@ impl ConnectionWatch {
     }
 }
 
-/// Runs the durable Threads command consumer until `stop` resolves.
+/// Runs the durable Threads command consumer and the outbox pump until `stop` resolves.
+///
+/// `resend` is when an unacknowledged `social.source.removed.v1` fact is published again (see
+/// [`crate::removal_acknowledgement`]).
 ///
 /// A capture is acknowledged only after its inbox/capture/outbox transaction
 /// committed and every pending outbox fact was acknowledged by `JetStream`.
@@ -160,6 +159,7 @@ impl ConnectionWatch {
 pub async fn run(
     connection: &NatsConnection,
     database: &Database,
+    resend: ResendPolicy,
     stop: impl Future<Output = ()> + Send,
 ) -> Result<(), NatsError> {
     let consumer = open_consumer(&connection.context).await?;
@@ -173,21 +173,21 @@ pub async fn run(
     tokio::pin!(stop);
     let mut watch = ConnectionWatch::default();
 
-    flush_outbox(&connection.context, database.pool()).await?;
+    flush_outbox(&connection.context, database.pool(), resend).await?;
     loop {
         tokio::select! {
             biased;
             () = &mut stop => return Ok(()),
             _ = outbox_ticker.tick() => {
                 watch.check(connection)?;
-                flush_outbox(&connection.context, database.pool()).await?;
+                flush_outbox(&connection.context, database.pool(), resend).await?;
             }
             message = messages.next() => {
                 let Some(message) = message else {
                     return Err(NatsError::Bus("the durable command stream ended".to_owned()));
                 };
                 let message = message.map_err(|error| NatsError::Bus(error.to_string()))?;
-                handle_delivery(connection, database, &inbox, &message).await?;
+                handle_delivery(connection, database, resend, &inbox, &message).await?;
             }
         }
     }
@@ -197,6 +197,7 @@ pub async fn run(
 async fn handle_delivery(
     connection: &NatsConnection,
     database: &Database,
+    resend: ResendPolicy,
     inbox: &BrowserCaptureInbox<'_>,
     message: &jetstream::Message,
 ) -> Result<(), NatsError> {
@@ -213,7 +214,7 @@ async fn handle_delivery(
     };
     match delivered {
         Ok(_) => {
-            flush_outbox(&connection.context, database.pool()).await?;
+            flush_outbox(&connection.context, database.pool(), resend).await?;
             settle(message, jetstream::AckKind::Ack).await
         }
         Err(BrowserCaptureInboxError::Persistence(error)) => {
@@ -286,95 +287,9 @@ fn validate_preprovisioned_consumer(
     Ok(())
 }
 
-/// Publishes the unpublished outbox rows that are due, oldest first.
-///
-/// A row that fails to publish stays unpublished, counts the attempt, records a content-free
-/// failure class and backs off exponentially (2 s, 4 s, ... capped at 5 min), so it cannot starve
-/// the rows behind it. The pass still reaches those rows, then surfaces the first failure so the
-/// worker stops and the process is restarted rather than staying ready over a broken relay. A row
-/// whose event type has no subject is a programming error, which the table CHECK makes
-/// unstorable: it stops the worker at once.
-async fn flush_outbox(context: &jetstream::Context, pool: &PgPool) -> Result<(), NatsError> {
-    let rows: Vec<(uuid::Uuid, String, serde_json::Value)> = sqlx::query_as(
-        "select event_id, event_type, payload from threads_archive.outbox_events \
-         where published_at is null and (next_attempt_at is null or next_attempt_at <= now()) \
-         order by occurred_at, event_id limit $1",
-    )
-    .bind(OUTBOX_BATCH_SIZE)
-    .fetch_all(pool)
-    .await
-    .map_err(PersistenceError::Query)?;
-    let mut first_failure = None;
-    for (event_id, event_type, payload) in rows {
-        let subject = outbox_subject(&event_type).ok_or(NatsError::UnexpectedOutboxEventType)?;
-        match publish_row(context, subject, event_id, &payload).await {
-            Ok(()) => {
-                sqlx::query(
-                    "update threads_archive.outbox_events set published_at = now() \
-                     where event_id = $1",
-                )
-                .bind(event_id)
-                .execute(pool)
-                .await
-                .map_err(PersistenceError::Query)?;
-            }
-            Err((failure_class, error)) => {
-                sqlx::query(
-                    "update threads_archive.outbox_events \
-                     set attempt_count = attempt_count + 1, last_error = $2, \
-                         next_attempt_at = now() + make_interval(\
-                             secs => least(power(2, attempt_count), 300)::float8) \
-                     where event_id = $1",
-                )
-                .bind(event_id)
-                .bind(failure_class)
-                .execute(pool)
-                .await
-                .map_err(PersistenceError::Query)?;
-                first_failure.get_or_insert(error);
-            }
-        }
-    }
-    first_failure.map_or(Ok(()), Err)
-}
-
-/// Publishes one row and waits for its `PubAck`, naming the failure class on error.
-async fn publish_row(
-    context: &jetstream::Context,
-    subject: &'static str,
-    event_id: uuid::Uuid,
-    payload: &serde_json::Value,
-) -> Result<(), (&'static str, NatsError)> {
-    let body = serde_json::to_vec(payload)
-        .map_err(|error| ("serialization_failed", NatsError::Bus(error.to_string())))?;
-    let mut headers = async_nats::HeaderMap::new();
-    headers.insert("Nats-Msg-Id", event_id.to_string());
-    let acknowledgement = context
-        .publish_with_headers(subject, headers, body.into())
-        .await
-        .map_err(|error| ("publish_failed", NatsError::Bus(error.to_string())))?;
-    acknowledgement
-        .await
-        .map_err(|_| ("ack_failed", NatsError::Unacknowledged))?;
-    Ok(())
-}
-
-fn outbox_subject(event_type: &str) -> Option<&'static str> {
-    match event_type {
-        "platform.operation.reported.v1" => Some(OPERATION_REPORT_SUBJECT),
-        "social.source.captured.v1" => Some(SOCIAL_CAPTURED_SUBJECT),
-        "social.source.updated.v1" => Some(SOCIAL_UPDATED_SUBJECT),
-        "social.source.removed.v1" => Some(SOCIAL_REMOVED_SUBJECT),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        COMMAND_STREAM, COMMAND_SUBJECT, CONSUMER_NAME, outbox_subject,
-        validate_preprovisioned_consumer,
-    };
+    use super::{COMMAND_STREAM, COMMAND_SUBJECT, CONSUMER_NAME, validate_preprovisioned_consumer};
     use async_nats::jetstream::consumer::{AckPolicy, Config};
 
     fn pull_config() -> Config {
@@ -384,27 +299,6 @@ mod tests {
             ack_policy: AckPolicy::Explicit,
             ..Config::default()
         }
-    }
-
-    #[test]
-    fn outbox_publication_is_limited_to_the_threads_acl() {
-        assert_eq!(
-            outbox_subject("platform.operation.reported.v1"),
-            Some("evt.platform.operation.reported.v1")
-        );
-        assert_eq!(
-            outbox_subject("social.source.captured.v1"),
-            Some("evt.social.source.captured.v1")
-        );
-        assert_eq!(
-            outbox_subject("social.source.updated.v1"),
-            Some("evt.social.source.updated.v1")
-        );
-        assert_eq!(
-            outbox_subject("social.source.removed.v1"),
-            Some("evt.social.source.removed.v1")
-        );
-        assert_eq!(outbox_subject("social.source.deleted.v1"), None);
     }
 
     #[test]

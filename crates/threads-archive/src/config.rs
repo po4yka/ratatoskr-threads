@@ -10,14 +10,18 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use secrecy::SecretString;
 use serde::Serialize;
 
 use crate::public_resolution::is_approved_endpoint;
+use crate::removal_acknowledgement::ResendPolicy;
 
 const ENV_PREFIX: &str = "RATATOSKR__";
 const RAW_OBJECT_ROOT_KEY: &str = "RATATOSKR__PUBLIC_RESOLUTION__RAW_OBJECT_ROOT";
+const RESEND_AFTER_KEY: &str = "RATATOSKR__TOMBSTONE__RESEND_AFTER_SECONDS";
+const RESEND_CAP_KEY: &str = "RATATOSKR__TOMBSTONE__RESEND_CAP_SECONDS";
 
 /// Process configuration with finite built-in limits.
 #[derive(Debug, Clone, Serialize)]
@@ -30,10 +34,34 @@ pub struct Config {
     pub bus: BusConfig,
     /// The public oEmbed resolution surface that completes accepted captures.
     pub public_resolution: PublicResolutionConfig,
+    /// How long a removal fact waits for Knowledge's acknowledgement before it is published again.
+    pub tombstone: TombstoneConfig,
     /// Telemetry pipeline configuration.
     pub telemetry: TelemetryConfig,
     /// Resource and shutdown limits.
     pub limits: Limits,
+}
+
+/// The resend schedule of an unacknowledged `social.source.removed.v1` fact (XR-021
+/// CONTRACTS.md R5-11).
+#[derive(Debug, Clone, Serialize)]
+pub struct TombstoneConfig {
+    /// Seconds before the first republish; each later delay doubles. 30 to 86400.
+    pub resend_after_seconds: u64,
+    /// The longest delay between two republishes in seconds: at least the first delay, at most
+    /// 604800.
+    pub resend_cap_seconds: u64,
+}
+
+impl TombstoneConfig {
+    /// The schedule in the form the outbox pump takes.
+    #[must_use]
+    pub const fn resend_policy(&self) -> ResendPolicy {
+        ResendPolicy::new(
+            Duration::from_secs(self.resend_after_seconds),
+            Duration::from_secs(self.resend_cap_seconds),
+        )
+    }
 }
 
 /// The narrow NATS connection held by this service role.
@@ -210,6 +238,19 @@ impl Config {
             });
         }
 
+        // The cap is only compared when both keys were accepted, so one bad value is reported once.
+        let tombstone = &config.tombstone;
+        if tombstone.resend_cap_seconds < tombstone.resend_after_seconds
+            && !violations.iter().any(|violation| {
+                violation.key == RESEND_CAP_KEY || violation.key == RESEND_AFTER_KEY
+            })
+        {
+            violations.push(Violation {
+                key: RESEND_CAP_KEY.to_owned(),
+                rule: "must be at least the resend delay",
+            });
+        }
+
         if violations.is_empty() {
             Ok(config)
         } else {
@@ -283,6 +324,14 @@ fn apply_entry(config: &mut Config, key: &str, value: &str, violations: &mut Vec
             Ok(parsed) => config.public_resolution.poll_interval_ms = parsed,
             Err(rule) => violations.push(refused(rule)),
         },
+        RESEND_AFTER_KEY => match parse_in_range(value, 30, 86_400) {
+            Ok(parsed) => config.tombstone.resend_after_seconds = parsed,
+            Err(()) => violations.push(refused("must be between 30 and 86400 seconds")),
+        },
+        RESEND_CAP_KEY => match parse_in_range(value, 1, 604_800) {
+            Ok(parsed) => config.tombstone.resend_cap_seconds = parsed,
+            Err(()) => violations.push(refused("must be at most 604800 seconds")),
+        },
         "RATATOSKR__TELEMETRY__LOG_FILTER" => {
             if value.trim().is_empty() {
                 violations.push(refused("must be a non-empty tracing filter expression"));
@@ -310,6 +359,14 @@ fn valid_bus_url(value: &str) -> bool {
     (value.starts_with("nats://") || value.starts_with("tls://"))
         && !value.contains('@')
         && value.len() <= 2048
+}
+
+fn parse_in_range(value: &str, lowest: u64, highest: u64) -> Result<u64, ()> {
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|parsed| (lowest..=highest).contains(parsed))
+        .ok_or(())
 }
 
 fn parse_positive<T>(value: &str) -> Result<T, &'static str>
@@ -342,6 +399,10 @@ impl Default for Config {
                 max_attempts: 5,
                 batch_size: 8,
                 poll_interval_ms: 2_000,
+            },
+            tombstone: TombstoneConfig {
+                resend_after_seconds: 600,
+                resend_cap_seconds: 21_600,
             },
             telemetry: TelemetryConfig {
                 log_filter: "info".to_owned(),

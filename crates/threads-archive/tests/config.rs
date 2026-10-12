@@ -211,3 +211,86 @@ fn public_resolution_overrides_apply_and_unsafe_values_are_refused_by_key() {
         "values must never render: {rendered}"
     );
 }
+
+const RESEND_AFTER: &str = "RATATOSKR__TOMBSTONE__RESEND_AFTER_SECONDS";
+const RESEND_CAP: &str = "RATATOSKR__TOMBSTONE__RESEND_CAP_SECONDS";
+
+fn with_tombstone<'a>(entries: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+    let mut all = vec![
+        ("RATATOSKR__BUS__URL", "nats://127.0.0.1:4222"),
+        (REQUIRED_RESOLVER_ROOT, RESOLVER_ROOT),
+    ];
+    all.extend_from_slice(entries);
+    all
+}
+
+#[test]
+fn tombstone_resend_defaults_to_ten_minutes_and_a_six_hour_cap() {
+    let config = Config::from_environment(with_tombstone(&[])).expect("the defaults load");
+
+    assert_eq!(config.tombstone.resend_after_seconds, 600);
+    assert_eq!(config.tombstone.resend_cap_seconds, 21_600);
+    let policy = config.tombstone.resend_policy();
+    assert_eq!(policy.after, std::time::Duration::from_mins(10));
+    assert_eq!(policy.cap, std::time::Duration::from_hours(6));
+}
+
+#[test]
+fn tombstone_resend_overrides_apply_inside_the_documented_range() {
+    let config = Config::from_environment(with_tombstone(&[
+        (RESEND_AFTER, "30"),
+        (RESEND_CAP, "604800"),
+    ]))
+    .expect("the range limits load");
+    assert_eq!(config.tombstone.resend_after_seconds, 30);
+    assert_eq!(config.tombstone.resend_cap_seconds, 604_800);
+
+    let config = Config::from_environment(with_tombstone(&[
+        (RESEND_AFTER, "86400"),
+        (RESEND_CAP, "86400"),
+    ]))
+    .expect("a cap equal to the delay loads");
+    assert_eq!(config.tombstone.resend_after_seconds, 86_400);
+}
+
+#[test]
+fn tombstone_resend_values_outside_the_range_are_refused_together_and_by_key() {
+    let error = Config::from_environment(with_tombstone(&[
+        (RESEND_AFTER, "29"),
+        (RESEND_CAP, "604801"),
+    ]))
+    .expect_err("a delay under 30 s and a cap over 7 days are refused");
+    let rendered = error.to_string();
+    assert_eq!(error.violations.len(), 2, "{rendered}");
+    assert!(rendered.contains(RESEND_AFTER), "{rendered}");
+    assert!(rendered.contains(RESEND_CAP), "{rendered}");
+    assert!(!rendered.contains("604801"), "values must never render");
+    assert!(
+        rendered
+            .contains("RATATOSKR__TOMBSTONE__RESEND_AFTER_SECONDS must be between 30 and 86400"),
+        "the rule names the range: {rendered}"
+    );
+    assert!(
+        rendered.contains("RATATOSKR__TOMBSTONE__RESEND_CAP_SECONDS must be at most 604800"),
+        "the rule names the limit: {rendered}"
+    );
+
+    let error = Config::from_environment(with_tombstone(&[(RESEND_AFTER, "86401")]))
+        .expect_err("a delay over one day is refused");
+    assert!(error.to_string().contains(RESEND_AFTER), "{error}");
+}
+
+#[test]
+fn tombstone_cap_below_the_delay_is_refused() {
+    let error = Config::from_environment(with_tombstone(&[
+        (RESEND_AFTER, "7200"),
+        (RESEND_CAP, "3600"),
+    ]))
+    .expect_err("a cap below the delay is refused");
+    assert_eq!(error.violations.len(), 1, "{error}");
+    assert!(error.to_string().contains(RESEND_CAP), "{error}");
+
+    let error = Config::from_environment(with_tombstone(&[(RESEND_AFTER, "30000")]))
+        .expect_err("a delay above the default cap needs a cap of its own");
+    assert!(error.to_string().contains(RESEND_CAP), "{error}");
+}

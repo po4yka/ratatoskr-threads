@@ -26,6 +26,7 @@ use ratatoskr_threads_archive::data_export_reprocessing::{
 };
 use ratatoskr_threads_archive::nats::{self, NatsConnection};
 use ratatoskr_threads_archive::public_resolution::{ApprovedOembedClient, RawObjectStore};
+use ratatoskr_threads_archive::removal_acknowledgement::ResendPolicy;
 use ratatoskr_threads_archive::telemetry::SERVICE_NAME;
 use ratatoskr_threads_archive::{Config, Database, PublicResolutionConfig};
 use ratatoskr_threads_archive_service::RuntimeState;
@@ -394,7 +395,12 @@ async fn tokio_main() -> Result<(), ExitCode> {
         ExitCode::FAILURE
     })?;
 
-    let mut bus = spawn_nats_consumer(&config.bus, database.clone()).await?;
+    let mut bus = spawn_nats_consumer(
+        &config.bus,
+        database.clone(),
+        config.tombstone.resend_policy(),
+    )
+    .await?;
     let mut resolver = spawn_capture_resolver(&config.public_resolution, database.clone()).await?;
 
     let runtime = Arc::new(RuntimeState::new());
@@ -452,6 +458,7 @@ async fn tokio_main() -> Result<(), ExitCode> {
 async fn spawn_nats_consumer(
     bus: &ratatoskr_threads_archive::BusConfig,
     database: Database,
+    resend: ResendPolicy,
 ) -> Result<Worker, ExitCode> {
     let connection = match bus.nkey_seed_path.as_deref() {
         Some(seed_path) => NatsConnection::connect_with_nkey(&bus.url, seed_path).await,
@@ -468,7 +475,7 @@ async fn spawn_nats_consumer(
             ExitCode::FAILURE
         })?;
     Ok(workers::spawn(WorkerKind::Bus, move |stop| async move {
-        nats::run(&connection, &database, stop).await
+        nats::run(&connection, &database, resend, stop).await
     }))
 }
 

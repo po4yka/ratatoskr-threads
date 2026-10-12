@@ -4,11 +4,13 @@ use std::time::Duration;
 
 use futures_util::StreamExt as _;
 use ratatoskr_social_contracts::SocialCaptureProvider;
+use ratatoskr_threads_archive::Database;
 use ratatoskr_threads_archive::capture_resolution::{CaptureResolver, ResolverPolicy};
 use ratatoskr_threads_archive::nats::{
     self, COMMAND_STREAM, COMMAND_SUBJECT, CONSUMER_NAME, NatsConnection,
 };
 use ratatoskr_threads_archive::public_resolution::{ApprovedOembedClient, RawObjectStore};
+use ratatoskr_threads_archive::removal_acknowledgement::ResendPolicy;
 use ratatoskr_threads_archive::test_support::fake_oembed::{FakeOembed, FakeReply};
 use ratatoskr_threads_archive::test_support::{TestDatabase, nats_url};
 use uuid::Uuid;
@@ -20,6 +22,15 @@ use common::{PERMALINK, command_with, threads_command};
 /// Every test here runs the real worker against the one durable consumer of the shared broker, so
 /// two of them at once would steal each other's commands.
 static BROKER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The worker as the service runs it, with the deployed resend defaults.
+async fn run_bus(
+    connection: NatsConnection,
+    database: Database,
+    stop: impl std::future::Future<Output = ()> + Send,
+) -> Result<(), nats::NatsError> {
+    nats::run(&connection, &database, ResendPolicy::default(), stop).await
+}
 
 #[expect(
     clippy::expect_used,
@@ -81,7 +92,7 @@ async fn durable_threads_subject_commits_then_reports_and_acknowledges() {
     let worker_database = database.database.clone();
     let worker_connection = connection.clone();
     let worker = tokio::spawn(async move {
-        nats::run(&worker_connection, &worker_database, async move {
+        run_bus(worker_connection, worker_database, async move {
             let _ignored = stop_rx.await;
         })
         .await
@@ -250,7 +261,7 @@ async fn removal_row_is_published_and_later_rows_are_not_blocked() {
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
     let worker_database = database.database.clone();
     let worker = tokio::spawn(async move {
-        nats::run(&connection, &worker_database, async move {
+        run_bus(connection, worker_database, async move {
             let _ignored = stop_rx.await;
         })
         .await
@@ -330,9 +341,10 @@ async fn failing_head_row_backs_off_and_later_rows_still_publish() {
         .await
         .expect("the service role connects");
     let worker_database = database.database.clone();
-    let worker = tokio::spawn(async move {
-        nats::run(&connection, &worker_database, std::future::pending()).await
-    });
+    let worker =
+        tokio::spawn(
+            async move { run_bus(connection, worker_database, std::future::pending()).await },
+        );
 
     let seen = wait_for_messages(&mut facts, &[healthy]).await;
     assert_eq!(
@@ -433,7 +445,7 @@ impl Pipeline {
         let (stop_resolver, resolver_stopped) = tokio::sync::oneshot::channel::<()>();
         let bus_database = database.database.clone();
         let bus = tokio::spawn(async move {
-            nats::run(&connection, &bus_database, async move {
+            run_bus(connection, bus_database, async move {
                 let _ignored = bus_stopped.await;
             })
             .await
@@ -578,7 +590,7 @@ impl BusWorker {
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
         let worker_database = database.database.clone();
         let task = tokio::spawn(async move {
-            nats::run(&connection, &worker_database, async move {
+            run_bus(connection, worker_database, async move {
                 let _ignored = stopped.await;
             })
             .await
