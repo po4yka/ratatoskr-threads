@@ -216,6 +216,75 @@ fn a_non_ascii_handle_is_refused_naming_the_ascii_rule() {
 }
 
 #[test]
+fn a_percent_encoded_query_is_discarded_not_refused() {
+    let input = "https://www.threads.net/@user/post/abc?xmt=a%3Db";
+    let canonicalized =
+        try_canonicalize(input).expect("an escape in the query must not refuse the permalink");
+    assert_eq!(
+        canonicalized.permalink().as_str(),
+        "https://www.threads.net/@user/post/abc"
+    );
+    assert_eq!(canonicalized.original(), input);
+}
+
+#[test]
+fn a_non_ascii_query_is_discarded_not_refused() {
+    let input = "https://www.threads.net/@user/post/abc?q=caf\u{e9}";
+    let canonicalized =
+        try_canonicalize(input).expect("a non-ASCII byte in the query must not refuse");
+    assert_eq!(
+        canonicalized.permalink().as_str(),
+        "https://www.threads.net/@user/post/abc"
+    );
+    assert_eq!(canonicalized.original(), input);
+}
+
+#[test]
+fn a_percent_encoded_fragment_is_discarded_not_refused() {
+    let input = "https://www.threads.net/@user/post/abc#frag%20ment-\u{e9}";
+    let canonicalized = try_canonicalize(input)
+        .expect("an escape or non-ASCII byte in the fragment must not refuse");
+    assert_eq!(
+        canonicalized.permalink().as_str(),
+        "https://www.threads.net/@user/post/abc"
+    );
+    assert_eq!(canonicalized.original(), input);
+}
+
+#[test]
+fn an_over_long_query_is_still_too_long() {
+    let mut long = String::from("https://www.threads.net/@user/post/abc?xmt=%3D");
+    while long.len() < 2049 {
+        long.push('x');
+    }
+    assert_eq!(refusal(&long), PermalinkError::TooLong(2049));
+}
+
+#[test]
+fn a_percent_escape_in_the_path_is_still_refused() {
+    assert_eq!(
+        refusal("https://www.threads.net/@user/post/ab%63"),
+        PermalinkError::PercentEncoded
+    );
+    assert_eq!(
+        refusal("https://www.threads.net/@user/post/ab%63?xmt=a%3Db"),
+        PermalinkError::PercentEncoded
+    );
+}
+
+#[test]
+fn a_non_ascii_byte_in_the_authority_or_path_is_still_refused() {
+    assert_eq!(
+        refusal("https://www.threads.net/@user/post/ab\u{e7}"),
+        PermalinkError::NonAscii
+    );
+    assert_eq!(
+        refusal("https://www.thr\u{e9}ads.net/@user/post/abc"),
+        PermalinkError::NonAscii
+    );
+}
+
+#[test]
 fn an_input_over_the_length_cap_is_refused_naming_the_length_rule() {
     let mut long = String::from("https://www.threads.net/@user/post/abc?");
     while long.len() < 2049 {

@@ -7,7 +7,9 @@
 //! letters, digits, periods, and underscores, and the post code is 1..=128
 //! characters of ASCII letters, digits, underscores, and hyphens. A tracking
 //! query string, a fragment, and trailing slashes after the code are stripped;
-//! nothing else is repaired.
+//! nothing else is repaired. The ASCII-only and no-percent-escape rules apply to
+//! the authority and the path only: the query and the fragment are discarded
+//! unvalidated, while the length cap still bounds the whole raw input.
 //!
 //! Every accepted form produces one canonical value,
 //! `https://www.threads.net/@<lowercased-handle>/post/<code>`: the scheme is
@@ -99,12 +101,6 @@ impl TryFrom<&str> for CanonicalizedUrl {
         if length > MAX_INPUT_LEN {
             return Err(PermalinkError::TooLong(length));
         }
-        if !raw.is_ascii() {
-            return Err(PermalinkError::NonAscii);
-        }
-        if raw.contains('%') {
-            return Err(PermalinkError::PercentEncoded);
-        }
 
         let Some((scheme, rest)) = raw.split_once("://") else {
             return Err(PermalinkError::InvalidUrl);
@@ -123,6 +119,15 @@ impl TryFrom<&str> for CanonicalizedUrl {
         } else {
             without_fragment
         };
+        // The query and the fragment are discarded unvalidated (XR-021 R4-07): a tracking
+        // parameter may carry escapes or non-ASCII text, and the grammar below only describes the
+        // authority and the path.
+        if !without_query.is_ascii() {
+            return Err(PermalinkError::NonAscii);
+        }
+        if without_query.contains('%') {
+            return Err(PermalinkError::PercentEncoded);
+        }
 
         let (authority, path) = if let Some((host_part, path_part)) = without_query.split_once('/')
         {
