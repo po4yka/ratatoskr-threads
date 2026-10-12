@@ -80,6 +80,12 @@ impl NatsConnection {
         })
     }
 
+    /// The `JetStream` context of this connection, for the other consumers of the same identity.
+    #[must_use]
+    pub fn jetstream(&self) -> &jetstream::Context {
+        &self.context
+    }
+
     /// Whether the connection is currently usable without a network probe.
     #[must_use]
     pub fn is_connected(&self) -> bool {

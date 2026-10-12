@@ -31,6 +31,8 @@ pub mod data_export;
 pub mod data_export_reprocessing;
 /// The owned `PostgreSQL` pool and the embedded `threads_archive` schema.
 pub mod database;
+/// Consumption of Knowledge's acknowledgement of a removal fact.
+pub mod deletion_acks;
 /// Privacy-safe observational linkage to completed Knowledge analyses.
 pub mod knowledge;
 /// Explicit policy for provider-media metadata, byte archival, and retention.

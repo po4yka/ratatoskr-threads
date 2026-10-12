@@ -53,6 +53,7 @@ pub struct RuntimeState {
     database: AtomicU8,
     bus: AtomicU8,
     resolver: AtomicU8,
+    deletion_acks: AtomicU8,
 }
 
 impl RuntimeState {
@@ -65,6 +66,7 @@ impl RuntimeState {
             database: AtomicU8::new(ABSENT),
             bus: AtomicU8::new(ABSENT),
             resolver: AtomicU8::new(ABSENT),
+            deletion_acks: AtomicU8::new(ABSENT),
         }
     }
 
@@ -105,11 +107,20 @@ impl RuntimeState {
             .store(if ready { UP } else { DOWN }, Ordering::Release);
     }
 
+    /// Record whether the consumer of Knowledge's deletion acknowledgements is running; see
+    /// [`Self::set_bus_ready`]. Only the consumer is a readiness fact: whether Knowledge answers
+    /// is not.
+    pub fn set_deletion_acks_ready(&self, ready: bool) {
+        self.deletion_acks
+            .store(if ready { UP } else { DOWN }, Ordering::Release);
+    }
+
     /// Record that `kind` returned before an orderly shutdown: readiness fails.
     pub fn worker_stopped(&self, kind: workers::WorkerKind) {
         match kind {
             workers::WorkerKind::Bus => self.set_bus_ready(false),
             workers::WorkerKind::Resolver => self.set_resolver_ready(false),
+            workers::WorkerKind::DeletionAcks => self.set_deletion_acks_ready(false),
         }
     }
 
@@ -120,6 +131,7 @@ impl RuntimeState {
             && !self.draining.load(Ordering::Acquire)
             && self.bus.load(Ordering::Acquire) != DOWN
             && self.resolver.load(Ordering::Acquire) != DOWN
+            && self.deletion_acks.load(Ordering::Acquire) != DOWN
     }
 
     /// The readiness checks, sorted by name so two consecutive bodies are
@@ -155,6 +167,7 @@ impl RuntimeState {
         }
         for (name, worker) in [
             (CheckName::Bus, &self.bus),
+            (CheckName::DeletionAcks, &self.deletion_acks),
             (CheckName::Resolver, &self.resolver),
         ] {
             let state = worker.load(Ordering::Acquire);
@@ -208,6 +221,9 @@ pub enum CheckName {
     Bus,
     /// The database answers. Present only when one is configured.
     Database,
+    /// The consumer of Knowledge's deletion acknowledgements is running. Present once it was
+    /// started.
+    DeletionAcks,
     /// No shutdown signal has arrived.
     Drain,
     /// The capture resolver is running. Present once it was started.

@@ -27,6 +27,14 @@ of XR-021: a bus-only configuration used to boot and now does not. The same chan
 `operation_reported_at`, `outbox_events.last_error`, the `event_type` CHECK and the `operation` value of the `aggregate_type` CHECK); there is no migration,
 so recreate a development database from the current schema.
 
+The service also consumes the Edge-provisioned durable `ratatoskr_threads_deletion_acks`
+(Knowledge's acknowledgement of a removal fact, XR-021 CONTRACTS.md R5-11) and refuses to start when
+it is missing or differs. `RATATOSKR__TOMBSTONE__RESEND_AFTER_SECONDS` (600) and
+`RATATOSKR__TOMBSTONE__RESEND_CAP_SECONDS` (21600) schedule the republication of an unacknowledged
+removal. This round changed `schema.sql` in place again (`outbox_events.acknowledged_at`,
+`ack_outcome`, `resend_count`, `next_resend_at`), `nats::run` takes a `ResendPolicy`, and a
+development database must be recreated.
+
 ## Code size limits
 
 `clippy.toml` beside the root `Cargo.toml` carries the limits: functions at most 100 lines of code, signatures at most 7 arguments, block nesting at most 5 deep, plus `allow-unwrap-in-tests` and the disallowed direct environment reads outside the config module. The numbers are the fresh-tree baseline, not an ambition; an exception is a site-level `#[expect]` with a reason. The gate also enforces the one limit clippy cannot express: no tracked `.rs` file may exceed 850 lines.
@@ -67,9 +75,11 @@ suite creates disposable databases from the embedded schema per test; without th
 fails rather than skips. CI additionally runs the 850-line file ratchet and a guard asserting this
 command list is byte-identical to `.github/workflows/ci.yml`.
 
-`crates/threads-archive/tests/nats_inbox_prefix.rs` starts its own authorization-enabled broker from
-the shipped stanza `deploy/nats/identity.conf` (the service connects under the inbox prefix
-`_INBOX_threads`, XR-021 CONTRACTS.md section R3-01), so `nats-server` must be on `PATH`. CI copies
+`crates/threads-archive/tests/nats_inbox_prefix.rs` and `nats_deletion_acks.rs` start their own
+authorization-enabled broker from the shipped stanza `deploy/nats/identity.conf` (the service
+connects under the inbox prefix `_INBOX_threads`, XR-021 CONTRACTS.md section R3-01), and
+`services/threads-archive/tests/deletion_acks.rs` starts a private anonymous one, so `nats-server`
+must be on `PATH`. CI copies
 it out of the NATS container it starts (the "Put nats-server on PATH" step); locally, install it or
 put the binary from `nats:2-alpine` on `PATH`. A missing binary fails the test.
 

@@ -24,6 +24,7 @@ use ratatoskr_threads_archive::data_export_reprocessing::{
     ReprocessClassification, ReprocessInput, ReprocessReport, ReprocessingStore,
     SUPPORTED_REPROCESSING_PARSER,
 };
+use ratatoskr_threads_archive::deletion_acks;
 use ratatoskr_threads_archive::nats::{self, NatsConnection};
 use ratatoskr_threads_archive::public_resolution::{ApprovedOembedClient, RawObjectStore};
 use ratatoskr_threads_archive::removal_acknowledgement::ResendPolicy;
@@ -395,12 +396,14 @@ async fn tokio_main() -> Result<(), ExitCode> {
         ExitCode::FAILURE
     })?;
 
+    let connection = connect_bus(&config.bus).await?;
     let mut bus = spawn_nats_consumer(
-        &config.bus,
+        connection.clone(),
         database.clone(),
         config.tombstone.resend_policy(),
     )
     .await?;
+    let mut acks = spawn_deletion_acks(connection, database.clone()).await?;
     let mut resolver = spawn_capture_resolver(&config.public_resolution, database.clone()).await?;
 
     let runtime = Arc::new(RuntimeState::new());
@@ -419,6 +422,7 @@ async fn tokio_main() -> Result<(), ExitCode> {
     // reports itself ready over an unverified dependency.
     let prober = spawn_database_prober(database.clone(), Arc::clone(&runtime));
     runtime.set_bus_ready(true);
+    runtime.set_deletion_acks_ready(true);
     runtime.set_resolver_ready(true);
     runtime.mark_startup_complete();
     tracing::info!(admin = %config.admin.listen_address, "startup complete");
@@ -433,6 +437,7 @@ async fn tokio_main() -> Result<(), ExitCode> {
         async {
             tokio::select! {
                 kind = bus.exited() => kind,
+                kind = acks.exited() => kind,
                 kind = resolver.exited() => kind,
             }
         },
@@ -441,6 +446,7 @@ async fn tokio_main() -> Result<(), ExitCode> {
 
     prober.abort();
     resolver.stop(WORKER_STOP_GRACE).await;
+    acks.stop(WORKER_STOP_GRACE).await;
     bus.stop(WORKER_STOP_GRACE).await;
 
     match serve_result {
@@ -455,19 +461,25 @@ async fn tokio_main() -> Result<(), ExitCode> {
     }
 }
 
-async fn spawn_nats_consumer(
+/// Connects the one broker identity that both bus workers share.
+async fn connect_bus(
     bus: &ratatoskr_threads_archive::BusConfig,
-    database: Database,
-    resend: ResendPolicy,
-) -> Result<Worker, ExitCode> {
-    let connection = match bus.nkey_seed_path.as_deref() {
+) -> Result<NatsConnection, ExitCode> {
+    match bus.nkey_seed_path.as_deref() {
         Some(seed_path) => NatsConnection::connect_with_nkey(&bus.url, seed_path).await,
         None => NatsConnection::connect(&bus.url).await,
     }
     .map_err(|error| {
-        tracing::error!(%error, "the NATS command consumer could not connect");
+        tracing::error!(%error, "the NATS connection could not be established");
         ExitCode::FAILURE
-    })?;
+    })
+}
+
+async fn spawn_nats_consumer(
+    connection: NatsConnection,
+    database: Database,
+    resend: ResendPolicy,
+) -> Result<Worker, ExitCode> {
     nats::ensure_command_consumer(&connection)
         .await
         .map_err(|error| {
@@ -477,6 +489,28 @@ async fn spawn_nats_consumer(
     Ok(workers::spawn(WorkerKind::Bus, move |stop| async move {
         nats::run(&connection, &database, resend, stop).await
     }))
+}
+
+/// Starts the consumer of Knowledge's deletion acknowledgements after verifying that Edge
+/// provisioned its durable as specified.
+async fn spawn_deletion_acks(
+    connection: NatsConnection,
+    database: Database,
+) -> Result<Worker, ExitCode> {
+    deletion_acks::ensure_acks_consumer(&connection)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "the deletion-acknowledgement consumer is not deployable");
+            ExitCode::FAILURE
+        })?;
+    Ok(workers::spawn(
+        WorkerKind::DeletionAcks,
+        move |stop| async move {
+            deletion_acks::consume_deletion_acks(&connection, &database, stop)
+                .await
+                .map(|_summary| ())
+        },
+    ))
 }
 
 /// Starts the capture resolver that completes accepted captures.

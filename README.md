@@ -175,7 +175,7 @@ A browser-extension capture arrives as a `social.capture.requested.v1` command o
 
 The outbox relay publishes `platform.operation.reported.v1`, `social.source.captured.v1`, `social.source.updated.v1` and `social.source.removed.v1` to `evt.` plus the event type. `outbox_events.event_type` carries a CHECK listing exactly those four, a failed publication records `attempt_count`, `last_error` and a backoff `next_attempt_at` so one failing row never starves the rows behind it, and an acknowledgement timeout is indistinguishable from a permission denial: check the NATS server log for a `Publish Violation`.
 
-When the NATS worker or the resolver returns before an orderly shutdown the process reports `/health/ready` as 503 (`bus` or `resolver` check) and exits non-zero.
+When the NATS worker, the consumer of Knowledge's deletion acknowledgements or the resolver returns before an orderly shutdown the process reports `/health/ready` as 503 (`bus`, `deletion_acks` or `resolver` check) and exits non-zero.
 
 Configuration, all under `RATATOSKR__PUBLIC_RESOLUTION__`: `RAW_OBJECT_ROOT` (required, absolute directory), `OEMBED_ENDPOINT` (default `https://graph.threads.com/oembed`, https only), `MAX_ATTEMPTS` (5), `BATCH_SIZE` (8) and `POLL_INTERVAL_MS` (2000). The oEmbed client carries no credential. If Meta requires an app token for the Threads oEmbed endpoint, the resolver reports every capture as unavailable until the token support that this change leaves out is added.
 
@@ -300,6 +300,14 @@ The consumer does not manufacture terminal unavailable, deleted, or linked-
 article partial outcomes. Those require a supported public-resolution or
 Extractor observation and remain the responsibility of those authoritative
 pipelines.
+
+### Knowledge's acknowledgement of a removal
+
+The `ratatoskr_events` stream drops its oldest message after 7 days or at 1 GiB, so a `social.source.removed.v1` fact that Knowledge has not consumed in time would be lost. Threads therefore keeps every removal until Knowledge answers with `knowledge.deletion.acknowledged.v1` and publishes the stored bytes again, with the same `event_id` as `Nats-Msg-Id`, while it is silent: the first copy follows `RATATOSKR__TOMBSTONE__RESEND_AFTER_SECONDS` (default 600, accepted 30 to 86400) after the first publication, each later wait doubles up to `RATATOSKR__TOMBSTONE__RESEND_CAP_SECONDS` (default 21600, at least the delay, at most 604800) and the resend never stops by count. The events stream collapses a repeated `Nats-Msg-Id` inside its 120 second duplicate window, which is why the default is 600 and the minimum of 30 exists for tests; a native smoke that wants to see a second copy in the stream must set at least 150.
+
+The service owns the Edge-provisioned durable `ratatoskr_threads_deletion_acks` on `ratatoskr_events` (filter `evt.knowledge.deletion.acknowledged.v1`, explicit acknowledgements, 30 second ack wait). It verifies the durable at startup and exits non-zero when it is missing or differs, and never creates one. A valid acknowledgement from `ratatoskr-knowledge` of family `social` sets `outbox_events.acknowledged_at` and `ack_outcome` on the removal with that `event_id` and tenant, which ends the resend. `refused` also ends it, raises an ERROR log line naming ids and the refusal class only and increments `threads_tombstone_refused_total`: the data stays in Knowledge and an operator must look. An acknowledgement that names no row of this service, another tenant's row or another family is acknowledged and ignored; a message that is not a valid acknowledgement from Knowledge is terminated.
+
+`threads_unacknowledged_tombstones` and `threads_oldest_unacknowledged_tombstone_age_seconds` are on the operator listener. Readiness does not depend on them: a Knowledge outage must not make Threads unready. A removal that is not acknowledged is never deleted by privacy deletion.
 
 ### Deployment
 

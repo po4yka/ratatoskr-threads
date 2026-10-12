@@ -21,6 +21,8 @@ pub enum WorkerKind {
     Bus,
     /// The capture resolver.
     Resolver,
+    /// The consumer of Knowledge's deletion acknowledgements.
+    DeletionAcks,
 }
 
 impl fmt::Display for WorkerKind {
@@ -28,6 +30,7 @@ impl fmt::Display for WorkerKind {
         formatter.write_str(match self {
             Self::Bus => "bus",
             Self::Resolver => "resolver",
+            Self::DeletionAcks => "deletion_acks",
         })
     }
 }

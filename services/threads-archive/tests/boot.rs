@@ -46,7 +46,7 @@ async fn spawn_service(database_url: &str, admin_port: u16) -> Child {
 
 #[expect(clippy::expect_used, reason = "boot-test helper; see free_port")]
 async fn spawn_service_with_bus(database_url: &str, admin_port: u16, bus_url: &str) -> Child {
-    ensure_command_stream().await;
+    ensure_edge_provisioning().await;
     Command::new(BIN)
         .env("RATATOSKR__STORAGE__DATABASE_URL", database_url)
         .env(
@@ -68,7 +68,7 @@ async fn spawn_service_with_bus(database_url: &str, admin_port: u16, bus_url: &s
     clippy::expect_used,
     reason = "test fixture: its broker/stream setup is required before service startup"
 )]
-async fn ensure_command_stream() {
+async fn ensure_edge_provisioning() {
     let client = async_nats::connect(nats_url())
         .await
         .expect("the local NATS test broker is reachable");
@@ -92,6 +92,27 @@ async fn ensure_command_stream() {
         )
         .await
         .expect("the Threads command consumer exists");
+    let events = context
+        .get_or_create_stream(async_nats::jetstream::stream::Config {
+            name: "ratatoskr_events".to_owned(),
+            subjects: vec!["evt.>".to_owned()],
+            ..async_nats::jetstream::stream::Config::default()
+        })
+        .await
+        .expect("the events stream exists");
+    let _acknowledgements = events
+        .get_or_create_consumer(
+            "ratatoskr_threads_deletion_acks",
+            async_nats::jetstream::consumer::pull::Config {
+                durable_name: Some("ratatoskr_threads_deletion_acks".to_owned()),
+                filter_subject: "evt.knowledge.deletion.acknowledged.v1".to_owned(),
+                ack_policy: async_nats::jetstream::consumer::AckPolicy::Explicit,
+                ack_wait: Duration::from_secs(30),
+                ..async_nats::jetstream::consumer::pull::Config::default()
+            },
+        )
+        .await
+        .expect("the Threads acknowledgement consumer exists");
 }
 
 #[cfg(unix)]
