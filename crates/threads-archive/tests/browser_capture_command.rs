@@ -19,11 +19,15 @@ use ratatoskr_threads_archive::browser_capture_inbox::{
 };
 use ratatoskr_threads_archive::test_support::TestDatabase;
 
+fn browser_command(provider: SocialCaptureProvider) -> CommandEnvelope {
+    browser_command_for(provider, "https://www.threads.net/@author/post/AbCd1")
+}
+
 #[expect(
     clippy::expect_used,
     reason = "fixture helper: every constructed fragment is static and contract-valid"
 )]
-fn browser_command(provider: SocialCaptureProvider) -> CommandEnvelope {
+fn browser_command_for(provider: SocialCaptureProvider, permalink: &str) -> CommandEnvelope {
     let idempotency_key = ContentDigest {
         algorithm: DigestAlgorithm::Sha256,
         hex: DigestHex::parse(&"a".repeat(64)).expect("a SHA-256 digest"),
@@ -31,8 +35,7 @@ fn browser_command(provider: SocialCaptureProvider) -> CommandEnvelope {
     let payload = SocialCaptureRequested {
         operation_id: OperationId(Uuid::now_v7()),
         idempotency_key,
-        original_permalink: PostPermalink::parse("https://www.threads.net/@author/post/AbCd1")
-            .expect("a permalink"),
+        original_permalink: PostPermalink::parse(permalink).expect("a permalink"),
         captured_at: WireTimestamp::now(), // wall-clock: opaque fixture value, only round-tripped and never compared to a calendar value
         provider,
         acquisition: AcquisitionMethod::BrowserExtension,
@@ -216,6 +219,51 @@ async fn intake_stores_operation_and_schedules_resolution() {
     assert_eq!(
         stored, expected,
         "the queued report is exactly the contracts builder's"
+    );
+
+    database.cleanup().await.expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_command_whose_permalink_carries_a_percent_encoded_query_is_recorded_for_resolution() {
+    let database = TestDatabase::create().await.expect("a test database");
+    let command = BrowserCaptureCommand::parse(&browser_command_for(
+        SocialCaptureProvider::Threads,
+        "https://www.threads.net/@author/post/AbCd1?xmt=a%3Db",
+    ))
+    .expect("a tracking parameter with an escape does not refuse the command");
+
+    let capture_id = BrowserCaptureInbox::new(&database.database)
+        .deliver(&command)
+        .await
+        .expect("the command persists")
+        .capture_id()
+        .expect("the first delivery is accepted");
+
+    let (canonical, status): (String, String) = sqlx::query_as(
+        "select canonical_url, status from threads_archive.captures where capture_id = $1",
+    )
+    .bind(capture_id)
+    .fetch_one(database.database.pool())
+    .await
+    .expect("the capture is stored");
+    assert_eq!(canonical, "https://www.threads.net/@author/post/AbCd1");
+    assert_eq!(
+        status, "accepted",
+        "the capture waits for the resolution lane"
+    );
+
+    let statuses: Vec<serde_json::Value> = sqlx::query_scalar(
+        "select payload->'payload'->'status' from threads_archive.outbox_events \
+         where event_type = 'platform.operation.reported.v1'",
+    )
+    .fetch_all(database.database.pool())
+    .await
+    .expect("the reports are readable");
+    assert_eq!(
+        statuses,
+        vec![serde_json::json!("queued")],
+        "only the queued report is emitted, no terminal failure"
     );
 
     database.cleanup().await.expect("cleanup");
