@@ -30,6 +30,13 @@ pub fn inspect_archive(
     let mut entry_names = Vec::with_capacity(archive.len());
     for index in 0..archive.len() {
         let file = archive.by_index(index).map_err(ExportError::InvalidZip)?;
+        // ZIP bit 11 requires UTF-8; the library can otherwise fall back to CP437.
+        if file.flags().as_u16() & 0x0800 != 0 && std::str::from_utf8(file.name_raw()).is_err() {
+            return Err(ExportError::InvalidZip(
+                zip::result::ZipError::InvalidArchive("filename is not UTF-8".into()),
+            ));
+        }
+        let name = file.name().map_err(ExportError::InvalidZip)?;
         compressed_bytes =
             checked_total(compressed_bytes, file.compressed_size(), "compressed_bytes")?;
         decompressed_bytes = checked_total(decompressed_bytes, file.size(), "decompressed_bytes")?;
@@ -46,10 +53,10 @@ pub fn inspect_archive(
         ) {
             return Err(ExportError::Limit {
                 limit: "compression_ratio",
-                detail: file.name().to_owned(),
+                detail: name.into_owned(),
             });
         }
-        entry_names.push(validate_entry_name(file.name(), limits.max_path_depth)?);
+        entry_names.push(validate_entry_name(&name, limits.max_path_depth)?);
     }
     Ok(InspectedArchive { entry_names })
 }
