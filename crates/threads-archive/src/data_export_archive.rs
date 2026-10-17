@@ -36,7 +36,19 @@ pub fn inspect_archive(
                 zip::result::ZipError::InvalidArchive("filename is not UTF-8".into()),
             ));
         }
-        let name = file.name().map_err(ExportError::InvalidZip)?;
+        let name = if file.flags().as_u16() & 0x0800 == 0 && !file.name_raw().is_ascii() {
+            // Unflagged names use CP437, even when their bytes also form valid UTF-8.
+            std::borrow::Cow::Owned(
+                file.name_raw()
+                    .iter()
+                    .copied()
+                    .map(oem_cp::Cp437::from)
+                    .map(char::from)
+                    .collect(),
+            )
+        } else {
+            file.name().map_err(ExportError::InvalidZip)?
+        };
         compressed_bytes =
             checked_total(compressed_bytes, file.compressed_size(), "compressed_bytes")?;
         decompressed_bytes = checked_total(decompressed_bytes, file.size(), "decompressed_bytes")?;

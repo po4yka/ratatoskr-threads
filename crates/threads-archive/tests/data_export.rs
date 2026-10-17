@@ -566,3 +566,55 @@ fn malformed_utf8_name(mut bytes: Vec<u8>) -> Vec<u8> {
     }
     bytes
 }
+
+#[test]
+fn inspector_preserves_unflagged_cp437_name() {
+    let archive = without_utf8_flag(zip_with_entries(&[("é.json", b"{}")]));
+    let inventory =
+        inspect_archive(&archive, ExportLimits::default()).expect("valid legacy archive");
+    assert_eq!(inventory.entry_names, vec!["├⌐.json"]);
+}
+
+fn without_utf8_flag(mut bytes: Vec<u8>) -> Vec<u8> {
+    for (signature, flags_offset) in [(b"PK\x03\x04", 7), (b"PK\x01\x02", 9)] {
+        let header = bytes
+            .windows(4)
+            .position(|window| window == signature)
+            .expect("synthetic ZIP header exists");
+        let flags = bytes
+            .get_mut(header + flags_offset)
+            .expect("flags byte exists");
+        assert_eq!(*flags & 0x08, 0x08, "writer marks the UTF-8 name");
+        *flags &= !0x08;
+    }
+    bytes
+}
+
+#[test]
+fn inspector_honors_validated_unicode_path_extra_field() {
+    for (valid_crc, expected) in [(true, "寿.json"), (false, "├⌐.json")] {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let mut options = zip::write::FullFileOptions::default();
+        // CRC32 of the original UTF-8 bytes of é.json, before clearing bit 11.
+        let crc = 0x6a38_7172_u32 ^ u32::from(!valid_crc);
+        let mut unicode_path = vec![1];
+        unicode_path.extend_from_slice(&crc.to_le_bytes());
+        unicode_path.extend_from_slice("寿.json".as_bytes());
+        options
+            .add_extra_field(0x7075, unicode_path, true)
+            .expect("Unicode Path extra field");
+        writer
+            .start_file("é.json", options)
+            .expect("synthetic entry");
+        writer.write_all(b"{}").expect("synthetic payload");
+        let archive = without_utf8_flag(writer.finish().expect("synthetic ZIP").into_inner());
+        let actual = inspect_archive(&archive, ExportLimits::default())
+            .expect("valid archive inspects")
+            .entry_names[0]
+            .clone();
+        assert_eq!(
+            actual, expected,
+            "only a valid CRC may replace the legacy name"
+        );
+    }
+}
